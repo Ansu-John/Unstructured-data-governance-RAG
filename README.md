@@ -35,7 +35,7 @@ This project bridges the gap between unstructured document storage and intellige
 The pipeline is broken down into three distinct phases: Data Extraction (AWS), Database Cataloging (Snowflake), and the AI Agent (LangGraph).
 
 ```mermaid
-graph TD;
+flowchart TD
     A[PDF files<br/>S3] -->|PySpark| B(JSON data files<br/>S3)
     B -->|PySpark / Copy| C[Snowflake Bronze]
     C -->|dbt| D[Snowflake Staging / Mart]
