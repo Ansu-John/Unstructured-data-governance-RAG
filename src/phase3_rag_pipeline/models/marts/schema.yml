@@ -1,0 +1,8 @@
+version: 2
+
+models:
+  - name: fct_knowledge_base
+    columns:
+      - name: vector_embedding
+        tests:
+          - not_null
