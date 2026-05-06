@@ -36,50 +36,29 @@ The pipeline is broken down into three distinct phases: Data Extraction (AWS), D
 
 ```mermaid
 
-flowchart TB
-    subgraph AWS[Phase 1: AWS Cloud Extraction]
-        direction TB
-        S3_Raw[("Raw Financial PDFs\n(S3 Bucket)")]
-        PySpark["PySpark Extractor\n(pdfplumber)"]
-        S3_Json[("Structured JSON\n(S3 Staging)")]
-        
-        S3_Raw --> PySpark --> S3_Json
-    end
-
-    subgraph Snowflake[Phase 2: Snowflake Data Cloud]
-        direction TB
-        Stage["External S3 Stage"]
-        Table[("CHUNK_TABLE\n(Relational Data)")]
-        Cortex_Embed["Snowflake Cortex\n(e5-base-v2 Embeddings)"]
-        
-        S3_Json --> Stage --> Table
-        Table --> Cortex_Embed --> Table
-    end
-
-    subgraph App[Phase 3: LangGraph AI Agent]
-        direction TB
-        User(("User"))
-        State["Agent State Machine\n(graph.py)"]
-        Retriever["Native Vector Search\n(retriever.py)"]
-        Cortex_LLM["Snowflake Cortex\n(llama3-70b)"]
-
-        User -->|1. Question| State
-        State -->|2. Search Query| Retriever
-        Retriever -->|3. Cosine Similarity| Table
-        Table -.->|4. Relevant Context| Retriever
-        Retriever -.-> State
-        State -->|5. Prompt + Context| Cortex_LLM
-        Cortex_LLM -.->|6. JSON Response| State
-        State -->|7. Final Answer| User
-    end
-    
-    %% Styling for enterprise look
+graph TB;
+    %% Style definitions to maintain original enterprise colors
+    classDef phase fill:#f9f,stroke:#333,stroke-width:2px;
     classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:black;
     classDef snow fill:#29B5E8,stroke:#1A365D,stroke-width:2px,color:black;
+    classDef dbt fill:#FF6344,stroke:#AD1111,stroke-width:2px,color:white;
     classDef ai fill:#00A67E,stroke:#005A40,stroke-width:2px,color:white;
+
+    %% Phase blocks
+    UserStart(("User<br>Question")):::phase
     
-    class S3_Raw,S3_Json,PySpark aws;
-    class Stage,Table,Cortex_Embed snow;
-    class State,Retriever,Cortex_LLM ai;
+    P1[/"Phase 1: AWS Data Extraction<br>(pdfplumber, PySpark)"/]::aws
+    P2[/"Phase 2: Snowflake Data Cloud<br>(Stage, Landing Table)"/]::snow
+    P3[/"Phase 3: dbt Transformation<br>& Embedding (SQL Models)"/]::dbt
+    P4[/"Phase 4: LangGraph AI Agent<br>(RAG, LLM Retrieval)"/]::ai
+    
+    Answer(("Final<br>Answer")):::phase
+
+    %% Connections and data flow
+    UserStart --> P1
+    P1 --"Structured JSON"--> P2
+    P2 --"Raw Table"--> P3
+    P3 --"Modeled & Vectorized Data"--> P4
+    P4 --> Answer
 
 ```
