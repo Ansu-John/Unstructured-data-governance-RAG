@@ -83,7 +83,3 @@ flowchart TB
     class State,Retriever,Cortex_LLM ai;
 
 ```
-    
-    class S3_Raw,S3_Json,PySpark aws;
-    class Stage,Table,Cortex_Embed snow;
-    class State,Retriever,Cortex_LLM ai;
