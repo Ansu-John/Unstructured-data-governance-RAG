@@ -10,7 +10,7 @@ resource "aws_sqs_queue" "pdf_dlq" {
 resource "aws_sqs_queue" "pdf_queue" {
   name                       = "pdf-ingestion-queue-${var.environment}"
   visibility_timeout_seconds = 7200 # 2 hours (must be longer than max EMR job time)
-  
+
   # Route poison pills to the DLQ after 3 failed attempts
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.pdf_dlq.arn
@@ -25,10 +25,10 @@ resource "aws_sqs_queue_policy" "eventbridge_sqs_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
+        Effect    = "Allow"
         Principal = { Service = "events.amazonaws.com" }
-        Action = "sqs:SendMessage"
-        Resource = aws_sqs_queue.pdf_queue.arn
+        Action    = "sqs:SendMessage"
+        Resource  = aws_sqs_queue.pdf_queue.arn
       }
     ]
   })
