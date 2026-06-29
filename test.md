@@ -12,6 +12,24 @@ An enterprise-grade, highly scalable Retrieval-Augmented Generation (RAG) pipeli
 
 Transitioning from a functional AI prototype to a production system requires solving for compute bottlenecks, data governance, and state management. This architecture decouples ingestion from extraction using event-driven AWS services, leverages PySpark Pandas UDFs for memory-safe PDF parsing, and utilizes Snowflake Cortex to ensure that sensitive embeddings and LLM inferences never leave the data warehouse boundary. 
 
+## Key Enterprise Features
+
+- **Event-Driven & Decoupled Ingestion**: S3 Event Notifications and SQS queues provide a durable buffer, preventing upstream upload spikes from overwhelming the compute layer.
+- **Memory-Safe Distributed Extraction**: Utilizes PySpark Pandas UDFs operating on S3 URIs (rather than raw binaries). This prevents driver Out-Of-Memory (OOM) errors and drastically reduces SerDe overhead when processing massive PDFs.
+- **Automated Data Quality & DLQ**: Corrupted or unparseable files are gracefully caught and routed to a Dead Letter Queue (DLQ) bucket for inspection, while dbt tests enforce strict schema and data constraints before vectorization.
+- **In-Database AI (Zero Egress)**: Snowflake Cortex natively generates vector embeddings (e5-base-v2) and executes LLM completions (llama3-70b) directly on the compute nodes where the data resides.
+- **Stateless, Checkpointed Agent**: The LangGraph agent runs in a scalable FastAPI Docker container on AWS ECS. It utilizes a PostgreSQL checkpointer to persist conversational state, ensuring durability against container failures.
+- **Secure Credential Management**: Zero hardcoded secrets. The application authenticates via IAM task roles and fetches database credentials and API keys dynamically from AWS SSM Parameter Store.
+
+## 🛠️ Technology Stack
+
+- Cloud & Orchestration: AWS (S3, SQS, EMR, ECS Fargate), Apache Airflow (MWAA)
+- Distributed Processing: Apache Spark (PySpark), pdfplumber, Pandas, Apache Arrow
+- Data Warehouse & AI: Snowflake, Snowpipe, Snowflake Cortex, dbt (Data Build Tool)
+- Agentic Framework: LangChain, LangGraph, FastAPI, PostgreSQL (State Management)
+- Infrastructure & Security: Terraform (IaC), AWS IAM, AWS SSM Parameter Store
+- CI/CD & Testing: GitHub Actions, Pytest, Docker, Poetry
+
 ## 🏗️ System Architecture
 
 The pipeline is segregated into four scalable tiers: **Event-Driven Ingestion**, **Distributed Extraction**, **Unified Data & AI Storage**, and **Stateless Agentic Serving**.
