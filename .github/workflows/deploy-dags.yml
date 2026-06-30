@@ -6,11 +6,13 @@ on:
       - main
     paths:
       - 'dags/**'
+      - 'tests/**'
   pull_request:
     branches:
       - main
     paths:
       - 'dags/**'
+      - 'tests/**'
 
 permissions:
   id-token: write
