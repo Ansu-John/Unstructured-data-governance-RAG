@@ -7,7 +7,7 @@ variable "environment" {
 variable "vpc_subnet_ids" {
   description = "List of private subnet IDs for MWAA (Must have NAT Gateway access)"
   type        = list(string)
-  default     = ["subnet-b110c780", "subnet-b7fe72e8"]
+  default     = ["subnet-7027a716", "subnet-b7fe72e8"]
 }
 
 variable "mwaa_security_group_ids" {
