@@ -6,10 +6,16 @@ on:
       - main
     paths:
       - 'dags/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'dags/**'
 
 permissions:
   id-token: write
   contents: read
+  pull-requests: write
 
 jobs:
   # Job 1: Test and Validate DAG Code Stability
