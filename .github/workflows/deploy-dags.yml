@@ -35,14 +35,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Install core airflow packages needed for compilation and structural parsing
-          pip install apache-airflow boto3
+          pip install apache-airflow boto3 pytest
 
       - name: Run Airflow DAG Integrity Tests
         env:
           # Set PYTHONPATH to include the dags folder so local module imports resolve seamlessly
           PYTHONPATH: ${{ github.workspace }}/dags
         run: |
-          python -m unittest discover -s tests -p "*_test.py"
+          pytest tests/*.py
 
   # Job 2: Continuous Deployment (Executes ONLY if Validation Passes)
   deploy-dags:
