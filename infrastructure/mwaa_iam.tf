@@ -80,17 +80,7 @@ resource "aws_iam_role_policy" "mwaa_policy" {
             "iam:PassedToService" : "elasticmapreduce.amazonaws.com"
           }
         }
-      },
-      {
-        #Allow MWAA to read SSM Parameters
-        Effect = "Allow"
-        Action = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath"
-        ]
-        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/enterprise-data-gov/*"
-}
+      }
     ]
   })
 }
