@@ -66,4 +66,4 @@ jobs:
 
       - name: Sync DAGs to MWAA S3 Bucket
         run: |
-          aws s3 sync dags/ s3://enterprise-data-gov-mwaa-dags-prod/dags/ --delete
+          aws s3 sync dags/ s3://enterprise-data-gov-mwaa-dags-prod/ --delete
