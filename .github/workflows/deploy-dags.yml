@@ -55,9 +55,9 @@ jobs:
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/YOUR_GITHUB_ACTIONS_OIDC_ROLE
+          role-to-assume: "arn:aws:iam::932021957888:role/github-actions-terraform-role"
           aws-region: us-east-1
 
       - name: Sync DAGs to MWAA S3 Bucket
         run: |
-          aws s3 sync dags/ s3://your-mwaa-environment-bucket-name/dags/ --delete
+          aws s3 sync dags/ s3://enterprise-data-gov-mwaa-dags-prod/dags/ --delete
