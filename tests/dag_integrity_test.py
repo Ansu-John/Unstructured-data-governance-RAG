@@ -10,8 +10,8 @@ class TestDagIntegrity(unittest.TestCase):
 
     def setUp(self):
         """Initialize the local DagBag context before running validations."""
-        # read_dags_from_db=False ensures we parse local files raw without metadata DB dependencies
-        self.dagbag = DagBag(dag_folder="dags", read_dags_from_db=False)
+        # Initialize DagBag without the deprecated read_dags_from_db parameter
+        self.dagbag = DagBag(dag_folder="dags", include_examples=False)
 
     def test_dag_serialization_and_load_errors(self):
         """Verifies that no files in the dags folder contain critical python syntax or missing import errors."""
