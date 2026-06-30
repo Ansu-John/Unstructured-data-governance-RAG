@@ -5,10 +5,10 @@ resource "aws_mwaa_environment" "data_gov_airflow" {
   airflow_version    = "2.8.1"
   environment_class  = "mw1.small" # Use small for dev/testing, scale up for true prod
   execution_role_arn = aws_iam_role.mwaa_execution_role.arn
-  
+
   # Point MWAA to the S3 bucket we just created
-  source_bucket_arn  = aws_s3_bucket.mwaa_dags.arn
-  dag_s3_path        = "dags/"
+  source_bucket_arn = aws_s3_bucket.mwaa_dags.arn
+  dag_s3_path       = "dags/"
 
   # Enterprise Security Settings
   webserver_access_mode = "PUBLIC_ONLY" # Set to PRIVATE_ONLY for strict enterprise compliance (requires VPN/Bastion to view UI)

@@ -72,8 +72,8 @@ resource "aws_iam_role_policy" "mwaa_policy" {
       },
       {
         # Allow MWAA to pass roles to EMR instances
-        Effect = "Allow"
-        Action = "iam:PassRole"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
         Resource = "*"
         Condition = {
           StringLike = {
