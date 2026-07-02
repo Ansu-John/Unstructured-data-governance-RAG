@@ -1,0 +1,78 @@
+# ============================================================================
+# .gitignore — AI Data Catalog Agent
+# ============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Poetry
+.poetry/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfplan
+crash.log
+
+# dbt
+dbt_packages/
+target/
+profiles/
+
+# Local development
+local_development/data/
+docker-compose.override.yml
+
+# Environment files
+.env
+.env.local
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Alembic
+*.pyc
+
+# Spark / EMR
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Operating System
+Thumbs.db
+Desktop.ini
+
+# Sphinx / docs
+docs/_build/
+
+# Byte-compiled
+*.pyc
+*.pyo

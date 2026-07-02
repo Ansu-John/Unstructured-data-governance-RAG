@@ -1,0 +1,82 @@
+# ============================================================================
+# dbt_project.yml — Silver → Gold Transformations
+#
+# Executes modular relational transformations that clean, deduplicate, enrich,
+# and aggregate data from the Silver (validated) layer into the Gold (curated)
+# analytics layer, optimized for downstream consumption and vector indexing.
+# ============================================================================
+
+name: "ai_data_catalog"
+version: "1.0.0"
+config-version: 2
+
+profile: "ai_data_catalog"
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# ---------------------------------------------------------------------------
+# Model configuration — Silver → Gold transformations
+# ---------------------------------------------------------------------------
+models:
+  ai_data_catalog:
+    silver:
+      +materialized: table
+      +schema: silver
+      +partition_by:
+        field: ingestion_date
+        data_type: date
+        granularity: day
+      +file_format: parquet
+      +persist_docs:
+        relation: true
+        columns: true
+
+    gold:
+      +materialized: table
+      +schema: gold
+      +partition_by:
+        field: ingestion_date
+        data_type: date
+        granularity: day
+      +file_format: parquet
+      +persist_docs:
+        relation: true
+        columns: true
+
+    catalog:
+      +materialized: table
+      +schema: catalog
+      +file_format: parquet
+      +persist_docs:
+        relation: true
+        columns: true
+
+# ---------------------------------------------------------------------------
+# Variable declarations for environment-specific overrides
+# ---------------------------------------------------------------------------
+vars:
+    bronze_bucket: "ai-catalog-bronze-dev"
+    silver_bucket: "ai-catalog-silver-dev"
+    gold_bucket: "ai-catalog-gold-dev"
+    quality_threshold: 0.95
+    dbt_version_check: true
+
+# ---------------------------------------------------------------------------
+# On-run start/end hooks for operational audit trails
+# ---------------------------------------------------------------------------
+on-run-start:
+  - "{{ log('dbt run started at ' ~ modules.datetime.now().isoformat(), info=True) }}"
+
+on-run-end:
+  - "{{ log('dbt run completed at ' ~ modules.datetime.now().isoformat(), info=True) }}"
+  - "{{ log('Models executed: ' ~ results | map(attribute='node.name') | join(', '), info=True) }}"
