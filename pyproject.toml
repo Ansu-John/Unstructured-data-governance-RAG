@@ -13,6 +13,7 @@ authors = [
 maintainers = [
     "Ansu <ansu@example.com>",
 ]
+package-mode = false
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/your-org/ai-data-catalog-agent"
