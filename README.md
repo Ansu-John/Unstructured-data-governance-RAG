@@ -1,50 +1,100 @@
-# 🤖 AI-Driven Data Quality & Cataloging Agent
+# Enterprise AI-Driven Data Quality & Cataloging Agent
 
-![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
-![PySpark](https://img.shields.io/badge/PySpark-3.5-E25A1C?logo=apachespark&logoColor=white)
-![Snowflake](https://img.shields.io/badge/Snowflake-Cortex-29B5E8?logo=snowflake&logoColor=white)
-![LangChain](https://img.shields.io/badge/LangChain-LangGraph-green)
-![AWS S3](https://img.shields.io/badge/AWS-S3-569A31?logo=amazons3&logoColor=white)
-![Pytest](https://img.shields.io/badge/Testing-Pytest-0A9EDC?logo=pytest&logoColor=white)
-
-An enterprise-grade Retrieval-Augmented Generation (RAG) pipeline and AI Agent designed to extract complex financial and contractual data from unstructured PDFs, catalog it securely in Snowflake, and provide intelligent, context-aware answers using **Snowflake Cortex** and **LangGraph**.
+**Version:** 1.0.0  
+**Architecture:** Medallion (Bronze → Silver → Gold) + LangGraph State Machine  
+**Stack:** PySpark, Great Expectations, LangGraph, Aurora PostgreSQL + pgvector, Amazon Bedrock  
+**Deployment:** Terraform (3-tier segregated state) + ECS Fargate + EMR Serverless
 
 ---
 
-## 🚀 Overview
 
-This project bridges the gap between unstructured document storage and intelligent data querying. It processes financial reports and contracts—specifically handling complex nested tables and checkboxes—and loads them into a vector database for semantic search. A LangGraph-orchestrated state machine then routes user queries to a Snowflake Cortex LLM (`llama3-70b`) for highly accurate, grounded responses.
-
-### ✨ Key Features
-
-* **Distributed Data Extraction:** Utilizes PySpark and `pdfplumber` to accurately parse structurally complex PDFs (including tabular financial data and checkbox booleans) directly from AWS S3.
-* **Native In-Database AI:** Leverages Snowflake Cortex for both generating vector embeddings (`e5-base-v2`) and executing LLM completions (`llama3-70b`), ensuring data never leaves the secure database boundary.
-* **Agentic Orchestration:** Built with LangGraph to manage the retrieval and generation state, allowing for scalable, multi-step reasoning capabilities.
-* **Enterprise Testing:** Comprehensive CI/CD-ready test suite using `pytest` and `unittest.mock` to validate pipeline logic and SQL executions without consuming database compute credits.
-
-## 🛠️ Technology Stack
-
-* **Data Engineering:** PySpark, Python, `pdfplumber`, Regular Expressions
-* **Cloud Storage:** AWS S3 (`hadoop-aws` integration)
-* **Data Warehouse & AI:** Snowflake, Snowflake Cortex, Snowpark
-* **LLM Orchestration:** LangChain, LangGraph
-* **Testing:** Pytest, `unittest.mock`
-
-## 🏗️ System Architecture
-
-The pipeline is broken down into three distinct phases: Data Extraction (AWS), Database Cataloging (Snowflake), and the AI Agent (LangGraph).
+## System Architecture
 
 ```mermaid
-flowchart TD
-    A[PDF files<br/>S3] -->|PySpark| B(JSON data files<br/>S3)
-    B -->|PySpark / Copy| C[Snowflake Bronze]
-    C -->|dbt| D[Snowflake Staging / Mart]
-    D -->|LangChain / LangGraph| E[User query response]
+flowchart LR
+  classDef awsService fill:#ff9900,stroke:#232f3e,stroke-width:2px,color:#000;
+  classDef storage fill:#3f8624,stroke:#232f3e,stroke-width:2px,color:#fff;
+  classDef model fill:#00a4a6,stroke:#232f3e,stroke-width:2px,color:#fff;
 
-    %% Optional styling for clarity
-    style A fill:#FF9900,color:black
-    style B fill:#FF9900,color:black
-    style C fill:#29B5E8,color:black
-    style D fill:#FF6344,color:white
-    style E fill:#00A67E,color:white
+  %% Data Ingestion
+  subgraph Ingestion [Data Source Ingestion]
+    direction TB
+    Docs[PDF / Data Files] --> S3_Bronze[(Amazon S3\nBronze Bucket)]:::storage
+  end
+
+  %% EMR Pipeline
+  subgraph EMR [AWS EMR Serverless]
+    direction TB
+    Parse[PDF Parsing & Extraction] --> DQ[Data Quality\nGreat Expectations]
+    DQ --> DBT[SQL Transformations\ndbt Core]
+  end
+
+  %% Agent Orchestration (ECS)
+  subgraph ECS [AWS ECS Fargate - FastAPI]
+    direction TB
+    subgraph LangGraph [LangGraph Agents]
+        direction TB
+        Ingest[Ingestion Agent] --> Profiler[Profiling & DQ Agent]
+        Profiler --> Catalog[Cataloging Agent]
+        Catalog --> Review[Human Review Node]
+        Review --> State[State Management]
+        State -. Condition atov .-> Ingest
+    end
+  end
+
+  %% AI Models
+  subgraph Bedrock [Amazon Bedrock]
+    direction TB
+    Claude[Anthropic Claude\nMetadata Gen/Remediation]:::model
+    Titan[Amazon Titan\nVector Generation]:::model
+  end
+
+  %% Storage & State
+  subgraph Persistent [Enterprise Storage & Catalog]
+    direction TB
+    S3_Gold[(Amazon S3\nSilver/Gold)]:::storage
+    Aurora[(Aurora PostgreSQL\nState Persistence)]:::storage
+    PgVector[(pgvector\nANN Search)]:::storage
+  end
+
+  %% Consumers
+  subgraph Consumers [Consumers]
+    direction TB
+    UI[Engineer UI\nHuman-in-the-Loop]
+    Glossary[Business Glossaries &\nData Discovery]
+  end
+
+  %% Relationships & Routing
+  S3_Bronze -- S3 Event Trigger --> Parse
+  S3_Bronze <--> |Intermediate Chunks| EMR
+  
+  Parse -- Text Chunks/Embeddings --> Ingest
+  
+  DBT <--> |Read/Write| S3_Gold
+  DQ -- Quality Results --> S3_Gold
+  
+  LangGraph <--> |Control LLM| Claude
+  LangGraph <--> |Embeddings Generation| Titan
+  
+  State <--> |LangGraph Checkpointing| Aurora
+  Catalog <--> |Vector Rules & Ops| PgVector
+  
+  LangGraph <--> |Human Review| UI
+  LangGraph --> Glossary
 ```
+
+### Core Stack Decisions
+
+| Layer | Technology | Rationale |
+|-------|-----------|-----------|
+| **Storage** | S3 (Bronze/Silver/Gold) | Immutable object store with Hive-style partitioning; cost-effective for data lake patterns |
+| **Batch Processing** | PySpark on EMR Serverless | Distributed compute for large-volume Bronze → Silver validation; serverless to avoid idle cluster cost |
+| **Data Quality** | Great Expectations | Declarative expectation suites; native PySpark integration; in-memory ephemeral context avoids deployment overhead |
+| **Orchestration** | LangGraph on ECS Fargate | Stateful graph with Postgres checkpointing; conditional routing for quality gates; retry loops |
+| **Vector Store** | Aurora PostgreSQL + pgvector | Single managed service for both LangGraph state persistence and vector ANN search; no external vector DB to operate |
+| **LLM Integration** | Amazon Bedrock (Claude 3.5 Sonnet + Titan Embeddings) | No GPU infrastructure to manage; native AWS IAM integration; lowest-latency option within VPC |
+| **State Segregation** | Terraform (3 states) | Isolate blast radius: networking changes don't affect DB, DB changes don't affect task definitions |
+| **Schema Migrations** | Alembic | Decouple schema evolution from Terraform; application-owned schema changes without infrastructure review |
+| **Observability** | OpenTelemetry → CloudWatch | Vendor-neutral instrumentation; structured JSON logging for metric extraction via CloudWatch Logs Insights |
+
+---

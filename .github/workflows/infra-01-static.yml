@@ -1,0 +1,120 @@
+# ============================================================================
+# infra-01-static.yml — Static Infrastructure CI/CD
+#
+# Trigger: Manual (workflow_dispatch) or on tags matching v*-core
+#
+# Deploys the 01-core-static lifecycle tier: VPC, subnets, S3 buckets, KMS.
+# This tier has the broadest blast radius and the lowest change frequency —
+# it is gated behind manual approval and tag-based release.
+# ============================================================================
+
+name: "Infra: 01 Core Static"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      apply:
+        description: "Apply (true) or Plan only (false)"
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+-core"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.8.5"
+  TF_WORKING_DIR: "infrastructure/01-core-static/${{ github.event.inputs.environment || 'dev' }}"
+
+jobs:
+  validate:
+    name: "Validate & Plan"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terraform"
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-01-core-static
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+
+  apply:
+    name: "Apply (Manual Gate)"
+    needs: [validate]
+    runs-on: ubuntu-latest
+    if: github.event.inputs.apply == 'true' || startsWith(github.ref, 'refs/tags/v')
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+      url: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terraform"
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-01-core-static
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Apply
+        run: terraform apply tfplan

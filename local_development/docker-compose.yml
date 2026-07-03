@@ -1,0 +1,70 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-catalog-pgvector
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging: *default-logging
+    networks:
+      - catalog-net
+
+  localstack:
+    image: localstack/localstack:4.0.3
+    container_name: ai-catalog-localstack
+    hostname: s3.localhost
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: LOCAL_DEV_AKID
+      AWS_SECRET_ACCESS_KEY: LOCAL_DEV_SAK
+      DATA_DIR: /var/lib/localstack/data
+      DEBUG: "0"
+      LS_LOG: "warn"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./init-scripts/02-init-s3-buckets.sh:/etc/localstack/init/ready.d/02-init-s3-buckets.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health | grep -q '\"s3\":\"available\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
+    networks:
+      - catalog-net
+
+volumes:
+  pgvector_data:
+    driver: local
+  localstack_data:
+    driver: local
+
+networks:
+  catalog-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1

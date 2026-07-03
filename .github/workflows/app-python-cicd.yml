@@ -1,0 +1,181 @@
+# ============================================================================
+# app-python-cicd.yml — Application CI/CD (Docker → ECR → ECS)
+#
+# Trigger: Push to main or develop branches, or PR targeting them.
+#
+# Pipeline stages:
+#   1. Lint & Type-check (ruff, mypy)
+#   2. Test (pytest with coverage)
+#   3. Build Docker image
+#   4. Push to ECR
+#   5. Deploy to ECS (rolling update with circuit breaker)
+# ============================================================================
+
+name: "App: Python CI/CD"
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ai-catalog-agent
+  SERVICE_NAME: ai-catalog-agent
+
+jobs:
+  lint-test:
+    name: "Lint, Type-Check & Test"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry install --no-interaction
+
+      - name: Lint with Ruff
+        run: poetry run ruff check src/ tests/
+
+      - name: Type Check with MyPy
+        run: poetry run mypy src/ --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Test with Pytest
+        run: |
+          poetry run pytest tests/ \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            -v \
+            --junitxml=test-results.xml
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+
+  docker-build:
+    name: "Build & Push Docker Image"
+    needs: [lint-test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ecr"
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            --build-arg BUILD_REVISION=${{ github.sha }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -f Dockerfile .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+
+  deploy-ecs:
+    name: "Deploy to ECS"
+    needs: [docker-build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    environment:
+      name: dev
+      url: https://console.aws.amazon.com/ecs/home?region=us-east-1
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ecs"
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download Task Definition
+        id: task-def
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition dev-ai-catalog-agent \
+            --query taskDefinition \
+            --output json > task-def.json
+
+      - name: Fill Image URI
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v2
+        with:
+          task-definition: task-def.json
+          container-name: agent-orchestrator
+          image: ${{ needs.docker-build.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: dev-ai-catalog-agent-svc
+          cluster: dev-ai-catalog-ecs
+          wait-for-service-stability: true
+          circuit-breaker: true
+
+      - name: Verify Deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster dev-ai-catalog-ecs \
+            --services dev-ai-catalog-agent-svc
+          echo "Deployment confirmed stable"
