@@ -56,10 +56,9 @@ def get_database_url() -> str:
         return url
 
     host = os.environ.get("DB_HOST", "localhost")
-    port = os.environ.get("DB_PORT", "5432")
-    name = os.environ.get("DB_NAME", "aicatalog")
-    user = os.environ.get("DB_USER", "catalog_admin")
-    password = os.environ.get("DB_PASSWORD", "catalog_dev_pwd_2024")
+    port = os.environ.get("DB_PORT", "5433")
+    name = os.environ.get("DB_NAME", "postgres")
+    user = os.environ.get("DB_USER", "postgres")
 
     return f"postgresql://{user}:{password}@{host}:{port}/{name}"
 
@@ -104,6 +103,7 @@ def run_migrations_online() -> None:
     Creates an Engine and associates a connection with the context.
     """
     connectable = create_engine(get_database_url())
+    print(f"DEBUG: Connecting to: {get_database_url()}")
 
     with connectable.connect() as connection:
         context.configure(

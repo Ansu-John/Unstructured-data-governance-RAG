@@ -64,8 +64,8 @@ module "database_aurora" {
   subnet_ids     = local.private_subnet_ids
   allowed_security_group_ids = []
 
-  database_name           = "aicatalog"
-  master_username         = "catalog_admin"
+  database_name           = "postgres"
+  master_username         = "postgres"
   serverless_min_capacity = 0.5
   serverless_max_capacity = 4.0
   deletion_protection     = false  # Disabled in dev for easier cleanup

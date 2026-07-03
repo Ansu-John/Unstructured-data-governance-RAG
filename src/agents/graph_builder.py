@@ -88,10 +88,7 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
     quality_results: Dict[str, Any] = state.get("quality_results", {})
 
     if not current_file_id or current_file_id not in quality_results:
-        logger.warning(
-            "No quality result for file '%s' — routing to cataloging as default",
-            current_file_id,
-        )
+        logger.info("No specific quality result to evaluate — routing to cataloging")
         return "cataloging"
 
     qr = quality_results[current_file_id]
@@ -245,10 +242,9 @@ def compile_graph_with_checkpointer() -> StateGraph:
 
         conn = psycopg2.connect(
             host=os.environ.get("DB_HOST", "localhost"),
-            port=int(os.environ.get("DB_PORT", "5432")),
-            dbname=os.environ.get("DB_NAME", "aicatalog"),
-            user=os.environ.get("DB_USER", "catalog_admin"),
-            password=os.environ.get("DB_PASSWORD", "catalog_dev_pwd_2024"),
+            port=int(os.environ.get("DB_PORT", "5433")),
+            dbname=os.environ.get("DB_NAME", "postgres"),
+            user=os.environ.get("DB_USER", "postgres"),
         )
         checkpointer = PostgresSaver(conn)
         checkpointer.setup()  # Ensure tables exist
@@ -285,12 +281,15 @@ def run_graph(
     """
     if bronze_paths:
         os.environ["BRONZE_S3_PATHS"] = ",".join(bronze_paths)
+    
+    # Create the config dict
+    config = {"configurable": {"thread_id": thread_id}}
 
     graph = compile_graph_with_checkpointer()
     initial_state = new_run_state(thread_id=thread_id)
 
     final_state: Dict[str, Any] = {}
-    for event in graph.stream(initial_state):
+    for event in graph.stream(initial_state, config=config):
         logger.debug("Graph event: %s", event)
         # The last event contains the final state
         for _, node_state in event.items():

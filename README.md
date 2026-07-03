@@ -183,7 +183,7 @@ docker compose ps
 # Both postgres and localstack should show "healthy"
 
 # Verify PostgreSQL + pgvector
-docker exec ai-catalog-pgvector psql -U catalog_admin -d aicatalog -c "SELECT extname, extversion FROM pg_extension;"
+docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "SELECT extname, extversion FROM pg_extension;"
 # Should show: vector, uuid-ossp, pg_stat_statements
 
 # Verify S3 buckets were created
@@ -213,8 +213,8 @@ alembic upgrade head
 alembic current
 
 # Verify tables were created
-docker exec ai-catalog-pgvector psql -U catalog_admin -d aicatalog -c "\dt catalog.*"
-docker exec ai-catalog-pgvector psql -U catalog_admin -d aicatalog -c "\dt langgraph.*"
+docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "\dt catalog.*"
+docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "\dt langgraph.*"
 ```
 
 ### Step 4: Run the Agent Graph Locally
@@ -272,7 +272,7 @@ docker compose logs -f postgres
 docker compose logs -f localstack
 
 # Access PostgreSQL directly
-docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog
+docker exec -it ai-catalog-pgvector psql -U postgres -d postgres
 ```
 
 ---
@@ -449,7 +449,7 @@ def downgrade():
 alembic upgrade head
 
 # Step 4: Verify
-docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog \
+docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
     -c "\d catalog.data_assets"
 
 # Step 5: Commit the migration file to version control
@@ -488,14 +488,14 @@ alembic downgrade 0001
 aws logs tail /langgraph/ai-catalog-agent/dev --since 30m
 
 # Step 2: Check quality run history directly on the DB
-docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog \
+docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
     -c "SELECT run_id, asset_name, success, score, failed_expectations, execution_secs
         FROM catalog.quality_runs
         WHERE run_timestamp > NOW() - INTERVAL '1 hour'
         ORDER BY run_timestamp DESC;"
 
 # Step 3: Check for stuck checkpoints
-docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog \
+docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
     -c "SELECT thread_id, checkpoint_id, created_at
         FROM langgraph.checkpoints
         WHERE created_at > NOW() - INTERVAL '1 hour'
@@ -507,7 +507,7 @@ docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog \
 ```bash
 # Option A: Reset the stuck thread (loses context but unblocks)
 # (Set via environment or DB)
-docker exec -it ai-catalog-pgvector psql -U catalog_admin -d aicatalog \
+docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
     -c "DELETE FROM langgraph.checkpoints WHERE thread_id = 'stuck-thread-id';"
 
 # Option B: Increase quality threshold temporarily (if upstream issue is known)

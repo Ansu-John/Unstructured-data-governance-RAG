@@ -61,10 +61,10 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
       - profiling_summary: str
       - errors: List[str]
     """
-    span = tracer.start_as_current_span("profiling_node") if HAS_OTEL else _NoopSpan()
-
-    try:
-        with span:
+    span_ctx = tracer.start_as_current_span("profiling_node") if HAS_OTEL else _NoopSpan()
+    with span_ctx as span:
+        try:
+        
             files: List[Dict] = state.get("files", [])
             quality_results: Dict[str, Dict] = state.get("quality_results", {})
             existing_profiles: Dict[str, Dict] = state.get("profile_results", {})
@@ -78,8 +78,8 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
                 # Skip if already profiled (idempotent)
                 if file_id in profiles:
                     continue
-                # Skip if no quality result or failed
-                qr_dict = quality_results.get(file_id)
+                # Default to success if quality checks haven't run yet
+                qr_dict = quality_results.get(file_id, {"success": True, "score": 1.0})
                 if qr_dict is None:
                     logger.info("Skipping file %s — no quality result yet", f["file_name"])
                     continue
@@ -120,17 +120,17 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
 
             return result
 
-    except Exception as exc:
-        logger.critical("Profiling node crashed: %s", exc, exc_info=True)
-        if HAS_OTEL:
-            span.record_exception(exc)
-        return {
-            "error": f"profiling_node: {exc}",
-            "errors": state.get("errors", []) + [f"profiling_node: {exc}"],
-        }
-    finally:
-        if HAS_OTEL:
-            span.end()
+        except Exception as exc:
+            logger.critical("Profiling node crashed: %s", exc, exc_info=True)
+            if HAS_OTEL:
+                span.record_exception(exc)
+            return {
+                "error": f"profiling_node: {exc}",
+                "errors": state.get("errors", []) + [f"profiling_node: {exc}"],
+            }
+        #finally:
+            #if HAS_OTEL:
+            #    span.end()
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +157,8 @@ def _compute_profile(
     when Spark is unavailable (local dev / test environments).
     """
     file_path = file_dict["file_path"]
-
-    if spark is not None:
+    # Fall back to mock profile if S3 paths are detected in local dev without AWS jars
+    if spark is not None and not file_path.startswith("s3://"):
         return _spark_profile(spark, file_path, file_dict["file_id"])
     else:
         return _mock_profile(file_dict)

@@ -33,6 +33,21 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 
+
+import sys
+from pathlib import Path
+
+# 1. Dynamically find the root 'Unstructured-data-governance-RAG' folder
+# __file__ is gx_suites.py. We go up 3 levels: quality -> data_pipeline -> src -> root
+project_root = str(Path(__file__).resolve().parents[3])
+
+# 2. Force this root directory to the very front of Python's path list
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# 3. NOW you can safely import your custom modules
+from src.common.config import settings
+
 import great_expectations as gx
 from great_expectations.core.batch import RuntimeBatchRequest
 from great_expectations.data_context import EphemeralDataContext
@@ -344,18 +359,36 @@ class _NoopSpan:
 
 def build_spark_session(app_name: str = "DataQualityValidator") -> SparkSession:
     """Build a SparkSession configured for local dev or EMR Serverless."""
-    return (
+    # 1. Base Builder: Your optimized EMR configs + the S3 Drivers
+    builder =  (
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.sql.adaptive.advisoryPartitionSizeInBytes", "64MB")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "CORRECTED")
+        .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "CORRECTED") 
+        
+        # REQUIRED FOR LOCAL: Download the AWS and Hadoop JARs
+        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262")
+        
+        # REQUIRED FOR S3 INTERACTION: Map both s3:// and s3a:// to the modern driver
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") 
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .getOrCreate()
     )
+
+    # 2. LocalStack Overrides: Only applied if the .env file provides a URL
+    if settings.aws_endpoint_url:
+        builder = (
+            builder
+            .config("spark.hadoop.fs.s3a.endpoint", settings.aws_endpoint_url)
+            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+            .config("spark.hadoop.fs.s3a.access.key", "LOCAL_DEV_AKID")
+            .config("spark.hadoop.fs.s3a.secret.key", "LOCAL_DEV_SAK")
+        )
+
+    return builder.getOrCreate()
 
 
 def get_latest_bronze_partitions(
@@ -466,10 +499,9 @@ def _persist_run_to_db(result: QualityRunResult) -> None:
         import psycopg2
         conn = psycopg2.connect(
             host=os.environ.get("DB_HOST", "localhost"),
-            port=int(os.environ.get("DB_PORT", "5432")),
-            dbname=os.environ.get("DB_NAME", "aicatalog"),
-            user=os.environ.get("DB_USER", "catalog_admin"),
-            password=os.environ.get("DB_PASSWORD", "catalog_dev_pwd_2024"),
+            port=int(os.environ.get("DB_PORT", "5433")),
+            dbname=os.environ.get("DB_NAME", "postgres"),
+            user=os.environ.get("DB_USER", "postgres"),
         )
         with conn.cursor() as cur:
             cur.execute(

@@ -44,7 +44,7 @@ def upgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_data_assets_embedding "
         "ON catalog.data_assets "
-        "USING ivfflat (embedding::vector(1536) vector_cosine_ops) "
+        "USING ivfflat (embedding vector_cosine_ops) "
         "WITH (lists = 200)"  # Increased from 100 for better recall
     )
 
@@ -64,6 +64,6 @@ def downgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_data_assets_embedding "
         "ON catalog.data_assets "
-        "USING ivfflat (embedding::vector(1536) vector_cosine_ops) "
+        "USING ivfflat (embedding vector_cosine_ops) "
         "WITH (lists = 100)"
     )

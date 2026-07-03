@@ -53,13 +53,13 @@ variable "allowed_security_group_ids" {
 variable "database_name" {
   description = "Name of the initial database"
   type        = string
-  default     = "aicatalog"
+  default     = "postgres"
 }
 
 variable "master_username" {
   description = "Master username for the Aurora cluster"
   type        = string
-  default     = "catalog_admin"
+  default     = "postgres"
 }
 
 variable "serverless_min_capacity" {

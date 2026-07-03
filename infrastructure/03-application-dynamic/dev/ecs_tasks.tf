@@ -132,7 +132,7 @@ resource "aws_ecs_task_definition" "dbt_runner" {
       environment = [
         { name = "DBT_TARGET",          value = var.environment },
         { name = "DB_HOST",             value = local.db_host },
-        { name = "DB_PORT",             value = "5432" },
+        { name = "DB_PORT",             value = "5433" },
         { name = "DB_NAME",             value = local.db_name },
         { name = "DB_USER",             value = "catalog_admin" },
         { name = "DB_PASSWORD",         value = "FROM_SECRETS_MANAGER" },

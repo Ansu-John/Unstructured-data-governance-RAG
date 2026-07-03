@@ -27,7 +27,7 @@ depends_on: str | None = None
 def upgrade() -> None:
     """Apply the initial schema."""
     # Enable extensions
-    op.execute('CREATE EXTENSION IF NOT EXISTS "vector"')
+    op.execute('CREATE EXTENSION IF NOT EXISTS vector')
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
 
     # LangGraph checkpoints table
@@ -93,16 +93,34 @@ def upgrade() -> None:
         "ADD CONSTRAINT data_assets_asset_type_check "
         "CHECK (asset_type IN ('table','view','file','stream','topic','model'))"
     )
+    # CONVERT: Change the column type from text to vector(1536)
+    # This step is required because you cannot index 'text' as a 'vector'
+    alter_query="""ALTER TABLE catalog.data_assets 
+        ALTER COLUMN embedding TYPE vector(1536) 
+        USING embedding::vector;
+    """
 
+    # Add unique constraint on file_path to support ON CONFLICT
+    op.execute(
+        "ALTER TABLE catalog.data_assets "
+        "ADD CONSTRAINT uq_data_assets_file_path UNIQUE (file_path)"
+    )
+    
+    print(f"DEBUG: executing query : {alter_query}")
+    op.execute(
+        alter_query
+    )
     # Add vector index (ivfflat for approximate nearest neighbor)
     # Note: The embedding column needs to be cast to vector type first.
     # This is done in a separate step because Alembic doesn't natively
     # support pgvector.
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_data_assets_embedding "
-        "ON catalog.data_assets "
-        "USING ivfflat (embedding::vector(1536) vector_cosine_ops) "
-        "WITH (lists = 100)"
+    index_query = """CREATE INDEX IF NOT EXISTS idx_data_assets_embedding 
+        ON catalog.data_assets 
+        USING ivfflat (embedding vector_cosine_ops) 
+        WITH (lists = 100)"""
+    print(f"DEBUG: executing query : {index_query}")
+    op.execute(index_query
+        
     )
 
     # Quality runs table

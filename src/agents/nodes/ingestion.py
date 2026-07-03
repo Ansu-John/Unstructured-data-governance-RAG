@@ -59,10 +59,13 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
       - ingestion_summary: str — human-readable summary
       - errors: List[str] — any errors encountered
     """
-    span = tracer.start_as_current_span("ingestion_node") if HAS_OTEL else _NoopSpan()
+    # 1. Rename the variable to clarify it is a context manager, not the span
+    span_ctx = tracer.start_as_current_span("ingestion_node") if HAS_OTEL else _NoopSpan()
 
-    try:
-        with span:
+    
+        # 2. Use 'as span' to capture the actual Span object
+    with span_ctx as span:
+        try:
             bronze_paths = _resolve_bronze_paths()
             discovered: list[FileRecord] = []
             errors: list[str] = []
@@ -111,17 +114,19 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
 
             return result
 
-    except Exception as exc:
-        logger.critical("Ingestion node crashed: %s", exc, exc_info=True)
-        if HAS_OTEL:
-            span.record_exception(exc)
-        return {
-            "error": f"ingestion_node: {exc}",
-            "errors": state.get("errors", []) + [f"ingestion_node: {exc}"],
-        }
-    finally:
-        if HAS_OTEL:
-            span.end()
+        except Exception as exc:
+            logger.critical("Ingestion node crashed: %s", exc, exc_info=True)
+            if HAS_OTEL:
+                span.record_exception(exc)
+            return {
+                "error": f"ingestion_node: {exc}",
+                "errors": state.get("errors", []) + [f"ingestion_node: {exc}"],
+            }
+    # 4. REMOVED the `finally: span.end()` block. 
+    # The OpenTelemetry context manager handles ending the span automatically.
+    #   finally:
+    #       if HAS_OTEL:
+    #           span.end()
 
 
 # ---------------------------------------------------------------------------
@@ -149,11 +154,13 @@ def _scan_s3_prefix(prefix: str) -> list[FileRecord]:
 
     try:
         import boto3
+        # Import your centralized settings object
+        from src.common.config import settings
         session = boto3.Session()
         s3 = session.client(
             "s3",
-            endpoint_url=os.environ.get("AWS_ENDPOINT_URL", None),  # LocalStack
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
+            endpoint_url=settings.aws_endpoint_url,  # LocalStack
+            region_name=settings.aws_region,
         )
 
         # Parse bucket and prefix

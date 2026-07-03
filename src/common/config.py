@@ -16,7 +16,7 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 try:
-    from pydantic_settings import BaseSettings
+    from pydantic_settings import BaseSettings, SettingsConfigDict
     HAS_PYDANTIC = True
 except ImportError:
     HAS_PYDANTIC = False
@@ -39,7 +39,18 @@ class Settings(BaseSettings):
     All values have sensible defaults for local development (Docker Compose).
     Override via environment variables in production (ECS / EMR Serverless).
     """
+    # 1. Explicitly declare the fields so they are no longer "extra"
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    
+    # ... your other existing fields here ...
 
+    # 2. Use strictly V2 syntax to enforce the config
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # Nuke any other extra variables
+    )
     # ── General ─────────────────────────────────────────────────────────
     environment: DeploymentEnvironment = DeploymentEnvironment.LOCAL
     service_name: str = "ai-data-catalog-agent"
@@ -47,10 +58,9 @@ class Settings(BaseSettings):
 
     # ── Database (PostgreSQL + pgvector) ────────────────────────────────
     db_host: str = Field(default="localhost", env="DB_HOST")
-    db_port: int = Field(default=5432, env="DB_PORT")
-    db_name: str = Field(default="aicatalog", env="DB_NAME")
-    db_user: str = Field(default="catalog_admin", env="DB_USER")
-    db_password: str = Field(default="catalog_dev_pwd_2024", env="DB_PASSWORD")
+    db_port: int = Field(default=5433, env="DB_PORT")
+    db_name: str = Field(default="postgres", env="DB_NAME")
+    db_user: str = Field(default="postgres", env="DB_USER")
     db_min_connections: int = Field(default=2, env="DB_MIN_CONNECTIONS")
     db_max_connections: int = Field(default=10, env="DB_MAX_CONNECTIONS")
 
@@ -131,10 +141,9 @@ else:
             self.service_name = "ai-data-catalog-agent"
             self.log_level = os.environ.get("LOG_LEVEL", "INFO")
             self.db_host = os.environ.get("DB_HOST", "localhost")
-            self.db_port = int(os.environ.get("DB_PORT", "5432"))
-            self.db_name = os.environ.get("DB_NAME", "aicatalog")
-            self.db_user = os.environ.get("DB_USER", "catalog_admin")
-            self.db_password = os.environ.get("DB_PASSWORD", "catalog_dev_pwd_2024")
+            self.db_port = int(os.environ.get("DB_PORT", "5433"))
+            self.db_name = os.environ.get("DB_NAME", "postgres")
+            self.db_user = os.environ.get("DB_USER", "postgres")
 
         @property
         def database_url(self) -> str:

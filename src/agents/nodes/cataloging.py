@@ -88,10 +88,11 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
       - cataloging_summary: str
       - errors: List[str]
     """
-    span = tracer.start_as_current_span("cataloging_node") if HAS_OTEL else _NoopSpan()
+    span_ctx  = tracer.start_as_current_span("cataloging_node") if HAS_OTEL else _NoopSpan()
 
-    try:
-        with span:
+    
+    with span_ctx as span:
+        try:
             files: List[Dict] = state.get("files", [])
             profiles: Dict[str, Dict] = state.get("profile_results", {})
             quality_results: Dict[str, Dict] = state.get("quality_results", {})
@@ -150,17 +151,17 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
 
             return result
 
-    except Exception as exc:
-        logger.critical("Cataloging node crashed: %s", exc, exc_info=True)
-        if HAS_OTEL:
-            span.record_exception(exc)
-        return {
-            "error": f"cataloging_node: {exc}",
-            "errors": state.get("errors", []) + [f"cataloging_node: {exc}"],
+        except Exception as exc:
+            logger.critical("Cataloging node crashed: %s", exc, exc_info=True)
+            if HAS_OTEL:
+                span.record_exception(exc)
+            return {
+                "error": f"cataloging_node: {exc}",
+                "errors": state.get("errors", []) + [f"cataloging_node: {exc}"],
         }
-    finally:
-        if HAS_OTEL:
-            span.end()
+        #finally:
+            #if HAS_OTEL:
+                #span.end()
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +221,11 @@ def _generate_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any
     """
     try:
         import boto3
+        # Import your centralized settings object
+        from src.common.config import settings
         bedrock = boto3.Session().client(
             "bedrock-runtime",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
+            region_name=settings.aws_region,
         )
 
         schema_context = json.dumps(profile_dict.get("schema_fields", []), indent=2)
@@ -292,9 +295,11 @@ def _compute_embedding(text: str) -> List[float]:
     """
     try:
         import boto3
+        # Import your centralized settings object
+        from src.common.config import settings
         bedrock = boto3.Session().client(
             "bedrock-runtime",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
+            region_name=settings.aws_region,
         )
 
         response = bedrock.invoke_model(
@@ -367,10 +372,9 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
 
         conn = psycopg2.connect(
             host=os.environ.get("DB_HOST", "localhost"),
-            port=int(os.environ.get("DB_PORT", "5432")),
-            dbname=os.environ.get("DB_NAME", "aicatalog"),
-            user=os.environ.get("DB_USER", "catalog_admin"),
-            password=os.environ.get("DB_PASSWORD", "catalog_dev_pwd_2024"),
+            port=int(os.environ.get("DB_PORT", "5433")),
+            dbname=os.environ.get("DB_NAME", "postgres"),
+            user=os.environ.get("DB_USER", "postgres"),
         )
 
         with conn.cursor() as cur:
@@ -384,7 +388,7 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
                      partition_count, embedding, metadata_json)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s::vector, %s)
-                ON CONFLICT (asset_name, source_system, file_path)
+                ON CONFLICT (file_path)   
                 DO UPDATE SET
                     quality_score = EXCLUDED.quality_score,
                     row_count = EXCLUDED.row_count,
