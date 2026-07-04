@@ -1,497 +1,752 @@
+# Operations Runbook — Enterprise AI Data Catalog Agent
 
-## Repository Layout
-
-```
-ai-data-catalog-agent/
-│
-├── .github/workflows/          # CI/CD: 3 infra tiers + 1 app pipeline
-│   ├── infra-01-static.yml     #   Network + Storage (tag: v*-core)
-│   ├── infra-02-platform.yml   #   DB + Compute (tag: v*-platform)
-│   ├── infra-03-app-dynamic.yml#   Tasks + Events (tag: v*-app)
-│   └── app-python-cicd.yml     #   Docker → ECR → ECS rolling deploy
-│
-├── infrastructure/
-│   ├── modules/                # Reusable Terraform modules
-│   │   ├── networking/         # VPC, subnets, NAT, VPC endpoints
-│   │   ├── storage_lake/       # Bronze/Silver/Gold S3 + KMS
-│   │   ├── compute_base/       # ECS cluster + EMR Serverless
-│   │   ├── database_aurora/    # Aurora Serverless v2 + pgvector
-│   │   └── observability/      # CloudWatch logs, dashboards, alarms
-│   │
-│   ├── 01-core-static/dev/     # LIFECYCLE TIER 1 (lowest change freq)
-│   │   ├── backend.tf          #   State: /dev/core-static/tfstate
-│   │   ├── main.tf             #   VPC + S3 + KMS
-│   │   └── outputs.tf          #   → SSM Parameter Store
-│   │
-│   ├── 02-platform-medium/dev/ # LIFECYCLE TIER 2 (medium change freq)
-│   │   ├── backend.tf          #   State: /dev/platform-medium/tfstate
-│   │   ├── data.tf             #   ← SSM from tier 1
-│   │   ├── main.tf             #   Aurora + ECS + EMR + Observability
-│   │   └── outputs.tf          #   → SSM Parameter Store
-│   │
-│   └── 03-application-dynamic/dev/  # LIFECYCLE TIER 3 (highest change freq)
-│       ├── backend.tf          #   State: /dev/app-dynamic/tfstate
-│       ├── data.tf             #   ← SSM from tiers 1 & 2
-│       ├── variables.tf        #   Input variables
-│       ├── ecs_tasks.tf        #   Task definitions + services
-│       ├── eventbridge.tf      #   S3 landing triggers + schedules
-│       └── dynamic_alerts.tf   #   App-level CloudWatch alarms
-│
-├── src/
-│   ├── data_pipeline/
-│   │   ├── quality/
-│   │   │   └── gx_suites.py    # GX + PySpark validation engine
-│   │   └── transformations/
-│   │       ├── dbt_project.yml # dbt project manifest
-│   │       └── models/         # Silver → Gold SQL models
-│   ├── db_migrations/          # Alembic migrations
-│   │   ├── env.py              # Alembic environment config
-│   │   └── versions/           # Versioned migration scripts
-│   ├── agents/
-│   │   ├── state.py            # AgentState TypedDict + domain models
-│   │   ├── graph_builder.py    # StateGraph assembly + conditional router
-│   │   └── nodes/
-│   │       ├── ingestion.py    # Bronze S3 scanner
-│   │       ├── profiling.py    # Schema profiling (PySpark)
-│   │       └── cataloging.py   # LLM description + pgvector write
-│   └── common/
-│       ├── config.py           # Pydantic settings (env-based config)
-│       └── telemetry.py        # OpenTelemetry bootstrap
-│
-├── local_development/
-│   ├── docker-compose.yml      # Postgres + pgvector + LocalStack
-│   └── init-scripts/
-│       ├── 01-init.sql         # Schema bootstrap (DDL + indexes)
-│       └── 02-init-s3-buckets.sh # S3 bucket creation + seeding
-│
-├── tests/
-│   ├── integration/
-│   │   └── test_graph.py       # Full graph integration tests
-│   └── unit/
-│       └── test_nodes.py       # Standalone node unit tests
-│
-├── pyproject.toml              # Poetry manifest
-├── .gitignore
-└── README.md                   # This file
-```
+**Classification:** Internal — SRE / Platform Team  
+**Primary On-Call:** Platform Engineering  
+**Escalation:** Data Engineering Lead → CTO  
 
 ---
 
-## Day 1: Local Development Deployment
+## Day 1: Production Deployment
 
 ### Prerequisites
 
-- Docker Desktop 4.25+
-- Python 3.12+
-- Poetry 1.8+
-- AWS CLI (for LocalStack compatibility)
-- Make (optional, but helpful)
+Before the first deployment, an SRE must provision:
 
-### Step 1: Start the Local Stack
-
-```bash
-cd local_development
-
-# Start PostgreSQL + pgvector + LocalStack (S3 mock)
-docker compose up -d
-
-# Verify health
-docker compose ps
-# Both postgres and localstack should show "healthy"
-
-# Verify PostgreSQL + pgvector
-docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "SELECT extname, extversion FROM pg_extension;"
-# Should show: vector, uuid-ossp, pg_stat_statements
-
-# Verify S3 buckets were created
-docker exec ai-catalog-localstack awslocal s3 ls
-# Should show: ai-catalog-bronze-dev, ai-catalog-silver-dev, ai-catalog-gold-dev
-```
-
-### Step 2: Install Python Dependencies
-
-```bash
-cd ..
-
-# Install with Poetry (creates .venv)
-poetry install
-
-# Activate the virtual environment
-poetry shell
-```
-
-### Step 3: Run Alembic Migrations
-
-```bash
-# Run all pending migrations
-alembic upgrade head
-
-# Verify migration status
-alembic current
-
-# Verify tables were created
-docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "\dt catalog.*"
-docker exec ai-catalog-pgvector psql -U postgres -d postgres -c "\dt langgraph.*"
-```
-
-### Step 4: Run the Agent Graph Locally
-
-```bash
-# Run the full LangGraph pipeline
-python -m src.agents.graph_builder
-
-# Expected output:
-#   Files discovered:    2
-#   Profiles computed:   1
-#   Catalog entries:     1
-#   Errors:              0
-```
-
-### Step 5: Run the Data Quality Pipeline
-
-```bash
-# Execute Great Expectations validation on Bronze data
-python -m src.data_pipeline.quality.gx_suites \
-    --bronze-path s3://ai-catalog-bronze-dev/crm/users/ \
-    --silver-path s3://ai-catalog-silver-dev/crm/users/ \
-    --quarantine-path s3://ai-catalog-bronze-dev/_quarantine/ \
-    --suite-name crm_users_suite \
-    --expectation-threshold 0.95
-```
-
-### Step 6: Run Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=src --cov-report=term-missing
-
-# Run specific test categories
-pytest tests/unit/ -v
-pytest tests/integration/ -v
-```
-
-### Local Development Quick Reference
-
-```bash
-# Stop and clean everything
-docker compose down -v        # Removes volumes (data loss!)
-docker compose down           # Keeps volumes
-
-# Reset the database
-docker compose down -v
-docker compose up -d
-
-# Tail logs
-docker compose logs -f postgres
-docker compose logs -f localstack
-
-# Access PostgreSQL directly
-docker exec -it ai-catalog-pgvector psql -U postgres -d postgres
-```
-
----
-
-## Day 1: Production Deployment (Terraform Lifecycle)
-
-### Bootstrap Prerequisites
-
-Before the first deployment, establish:
-
-1. **S3 State Bucket:** `ai-catalog-terraform-state` (created outside Terraform)
+1. **S3 State Bucket:** `ai-catalog-terraform-state-<account-id>` (created outside Terraform)
 2. **DynamoDB Lock Table:** `ai-catalog-terraform-locks` (created outside Terraform)
-3. **GitHub OIDC Provider:** IAM role for GitHub Actions (`github-actions-terraform`)
+3. **GitHub OIDC Provider:** IAM role for GitHub Actions with trust to the repo
 
-### Deployment Order (MANDATORY)
+### Bootstrap Validation
 
-These three tiers MUST be deployed in sequence. Each tier reads SSM parameters published by the previous tier.
+```bash
+# Verify all prerequisites before deploying
+aws s3api head-bucket --bucket "ai-catalog-terraform-state-$(aws sts get-caller-identity --query Account --output text)"
+aws dynamodb describe-table --table-name ai-catalog-terraform-locks --query 'Table.TableStatus'
+aws iam get-role --role-name github-actions-terraform --query 'Role.Arn'
+```
+
+### Deployment Sequence (MANDATORY ORDER)
+
+> **WARNING:** These three tiers MUST be deployed in order. Each tier reads SSM parameters published by the previous tier. Deploying out of order causes unresolvable `data.aws_ssm_parameter` errors.
 
 #### Tier 1: Core Static (Network + Storage)
+
+**Change frequency:** 1–2 changes per quarter  
+**Blast radius:** Broad (entire network topology)  
+**State key:** `dev/core-static/tfstate`
 
 ```bash
 cd infrastructure/01-core-static/dev
 
-terraform init
-terraform plan -out=tfplan
+terraform init -backend-config="key=dev/core-static/tfstate"
+terraform plan -out=tfplan -var-file=terraform.tfvars
 terraform apply tfplan
 ```
 
-**What it creates:**
-- VPC with public/private subnets across 2 AZs
+**Resources created:**
+- VPC (10.0.0.0/16) with public/private subnets across 2 AZs
 - NAT Gateway + Internet Gateway
 - S3 VPC Endpoint + DynamoDB VPC Endpoint
-- Bronze, Silver, Gold S3 buckets with KMS encryption
-- **Publishes output to SSM:** `/dev/core-static/vpc-id`, `/dev/core-static/private-subnet-ids`, `/dev/core-static/bronze-bucket-id`, etc.
+- Bronze, Silver, Gold S3 buckets with KMS CMK encryption
+- KMS key with automatic rotation
 
-**Blast radius:** Broad (entire network topology). Changes here affect all downstream tiers. Expect 1–2 changes per quarter.
+**SSM outputs published:**
+| Parameter | Example Value |
+|-----------|--------------|
+| `/dev/core-static/vpc-id` | `vpc-0a1b2c3d` |
+| `/dev/core-static/private-subnet-ids` | `subnet-xxx,subnet-yyy` |
+| `/dev/core-static/bronze-bucket-id` | `ai-catalog-dev-bronze` |
+| `/dev/core-static/bronze-bucket-arn` | `arn:aws:s3:::ai-catalog-dev-bronze` |
+| `/dev/core-static/silver-bucket-id` | `ai-catalog-dev-silver` |
+| `/dev/core-static/gold-bucket-id` | `ai-catalog-dev-gold` |
+| `/dev/core-static/kms-key-arn` | `arn:aws:kms:us-east-1:...` |
+
+**Verification:**
+```bash
+aws s3 ls s3://$(aws ssm get-parameter --name /dev/core-static/bronze-bucket-id --query Parameter.Value --output text)
+aws ec2 describe-vpcs --vpc-ids $(aws ssm get-parameter --name /dev/core-static/vpc-id --query Parameter.Value --output text)
+```
 
 #### Tier 2: Platform Medium (Database + Compute)
+
+**Change frequency:** 2–4 changes per month  
+**Blast radius:** Medium (database resizing, EMR config changes)  
+**State key:** `dev/platform-medium/tfstate`
 
 ```bash
 cd infrastructure/02-platform-medium/dev
 
-terraform init
+terraform init -backend-config="key=dev/platform-medium/tfstate"
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-**What it creates:**
-- Aurora Serverless v2 PostgreSQL cluster (0.5–4 ACU)
+**Resources created:**
+- Aurora Serverless v2 PostgreSQL cluster (0.5–4 ACU) with pgvector
 - ECS Cluster (Fargate) with Container Insights
-- EMR Serverless Application (Spark)
-- CloudWatch Log Groups, Dashboards, SNS Alarm Topic
-- **Publishes to SSM:** `/dev/platform-medium/db-host`, `/dev/platform-medium/ecs-cluster-name`, `/dev/platform-medium/db-secret-arn`
+- EMR Serverless Application (Spark 3.5)
+- CloudWatch Log Groups, Metric Filters, Alarms, Dashboard
+- SNS Topic for alarm notifications
 
-**Blast radius:** Medium. DB resizing, parameter group changes, EMR config updates. Expect 2–4 changes per month.
+**SSM outputs published:**
+| Parameter | Purpose |
+|-----------|---------|
+| `/dev/platform-medium/db-host` | Aurora writer endpoint |
+| `/dev/platform-medium/db-name` | Database name (postgres) |
+| `/dev/platform-medium/db-secret-arn` | Secrets Manager ARN for credentials |
+| `/dev/platform-medium/db-security-group-id` | DB security group |
+| `/dev/platform-medium/ecs-cluster-name` | ECS cluster name |
+| `/dev/platform-medium/ecs-task-execution-role-arn` | Task execution IAM role |
+| `/dev/platform-medium/emr-application-id` | EMR Serverless app ID |
+
+**Verification:**
+```bash
+# Wait for Aurora to be available (can take 5-10 minutes on first creation)
+aws rds describe-db-instances \
+    --db-instance-identifier dev-ai-catalog-aurora-writer-1 \
+    --query 'DBInstances[0].DBInstanceStatus'
+
+# Test DB connectivity (requires VPN or bastion)
+psql -h $(aws ssm get-parameter --name /dev/platform-medium/db-host --query Parameter.Value --output text) \
+    -U postgres -d postgres -c "SELECT extname FROM pg_extension;"
+```
 
 #### Tier 3: Application Dynamic (Tasks + Events)
+
+**Change frequency:** Every application release  
+**Blast radius:** Narrow (task definitions, event rules)  
+**State key:** `dev/app-dynamic/tfstate`
 
 ```bash
 cd infrastructure/03-application-dynamic/dev
 
-terraform init
+terraform init -backend-config="key=dev/app-dynamic/tfstate"
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-**What it creates:**
+**Resources created:**
 - ECS Task Definitions (agent orchestrator, dbt runner)
-- ECS Service with security group
+- ECS Fargate Service with security group
 - EventBridge Rules (S3 landing trigger + periodic quality check)
-- Application-level CloudWatch Alarms (stall detection, quality spikes)
+- Application-level CloudWatch Alarms
 
-**Blast radius:** Narrow. Task def revisions, event rule changes, alarm tuning. Expect changes on every application release.
+**Post-Deployment:**
+```bash
+# 1. Run Alembic migrations against the new Aurora cluster
+uv run alembic upgrade head
+
+# 2. Verify the agent can connect and execute
+uv run python -c "from src.agents.graph_builder import run_graph; result = run_graph(); print('OK')"
+
+# 3. Verify ECS service is healthy
+aws ecs describe-services \
+    --cluster dev-ai-catalog-ecs \
+    --services dev-ai-catalog-agent-svc \
+    --query 'services[0].{status: status, running: runningCount, desired: desiredCount}'
+```
 
 ### CI/CD Tag-Based Promotion
 
-| Tag Pattern | Tier | What Deploys |
-|-------------|------|-------------|
-| `v1.2.3-core` | 01-core-static | VPC + S3 + KMS |
-| `v1.2.3-platform` | 02-platform-medium | DB + ECS + EMR |
-| `v1.2.3-app` | 03-application-dynamic | Tasks + Events + Alarms |
-| Push to `main` | Application | Docker build → ECR → ECS rolling deploy |
-
-### Post-Deployment Steps
-
-```bash
-# 1. Run Alembic migrations against the new Aurora cluster
-alembic upgrade head
-
-# 2. Verify the agent can connect
-python -c "from src.agents.graph_builder import run_graph; result = run_graph(); print('Graph execution successful')"
-```
+| Action | Tag | Pipeline |
+|--------|-----|----------|
+| Network/Storage change | `v1.2.3-core` | `infra-01-static.yml` |
+| Platform change | `v1.2.3-platform` | `infra-02-platform.yml` |
+| App change | `v1.2.3-app` | `infra-03-app-dynamic.yml` |
+| Push to `main` | (automatic) | `app-python-cicd.yml` |
 
 ---
 
 ## Day 2: Operations Runbooks
 
-### Runbook 1: Transient Database Connection Loss
+### RB-001: Database Connection Loss
 
-**Symptoms:** Agent errors contain `psycopg2.OperationalError: connection to server`, CloudWatch alarm `db-connection-failure` firing.
+**Severity:** Critical  
+**Symptoms:** Agent errors contain `psycopg2.OperationalError`, CloudWatch alarm `agent-loop-stall` firing, ECS task health checks failing.
 
 **Root Causes:**
-- Aurora Serverless scaling event (0.5 ACU → 4 ACU)
+- Aurora Serverless scaling event (cold start)
 - Maintenance window failover
-- Network ACL / Security Group misconfiguration
-- VPC Endpoint transient failure
+- Security group drift
+- VPC Endpoint failure
 
-**Resolution:**
-
+**Diagnosis:**
 ```bash
-# Step 1: Verify DB is reachable from within the VPC
+# Step 1: Check Aurora status
 aws rds describe-db-instances \
     --db-instance-identifier dev-ai-catalog-aurora-writer-1 \
-    --query 'DBInstances[0].{Status:DBInstanceStatus,Endpoint:Endpoint.Address}'
+    --query 'DBInstances[0].{Status:DBInstanceStatus,Endpoint:Endpoint.Address,Scaling:ServerlessV2ScalingConfiguration}'
 
-# Step 2: Check Aurora scaling events
+# Step 2: Check recent RDS events
 aws rds describe-events \
     --source-type db-instance \
     --source-identifier dev-ai-catalog-aurora-writer-1 \
     --duration 360
 
-# Step 3: Verify Security Group ingress
-aws ec2 describe-security-group-rules \
-    --filter Name=group-id,Values=<sg-xxx> \
-    --query 'SecurityGroupRules[?FromPort==`5432`]'
+# Step 3: Query CloudWatch for error rate
+aws logs insights-query \
+    --log-group-names /ecs/ai-catalog-agent/dev \
+    --query-string "fields @timestamp, @message | filter @message like /OperationalError|ConnectionError/ | sort @timestamp desc | limit 20" \
+    --start-time -3600
+```
 
-# Step 4: If DB is healthy, restart the ECS service
+**Resolution:**
+```bash
+# Option A: Force ECS service restart (re-establishes connection pool)
 aws ecs update-service \
     --cluster dev-ai-catalog-ecs \
     --service dev-ai-catalog-agent-svc \
     --force-new-deployment
 
-# Step 5 (if persistent): Increase min ACU to prevent scale-to-zero
+# Option B: If Aurora is scaling, increase min ACU to prevent recurrence
 # Edit infrastructure/02-platform-medium/dev/main.tf:
 #   serverless_min_capacity = 1.0
-# Then apply
 cd infrastructure/02-platform-medium/dev
 terraform apply
+
+# Option C: If Security Group is the issue, verify ingress
+aws ec2 describe-security-group-rules \
+    --filter Name=group-id,Values=<sg-xxx> \
+    --query 'SecurityGroupRules[?FromPort==`5432`]'
 ```
 
 **Prevention:**
-- Set `serverless_min_capacity = 1.0` for production (prevents cold starts)
-- Configure RDS Proxy for connection pooling (not shown in this version)
-- Implement circuit breaker in the agent (built-in: retry_router retries up to 3 times)
+- Set `serverless_min_capacity = 1.0` in production
+- The `compile_graph_with_checkpointer()` function has automatic fallback to `MemorySaver` — but this loses state across restarts
+- Monitor `DBConnections` metric in the CloudWatch dashboard
 
-### Runbook 2: Incremental Schema Migration via Alembic
+---
 
-**Scenario:** Adding a new column `data_classification` to the `catalog.data_assets` table.
+### RB-002: Alembic Migration Failure
 
+**Severity:** High  
+**Symptoms:** `uv run alembic upgrade head` fails with errors, deployment pipeline stuck at migration step.
+
+**Diagnosis:**
 ```bash
-# Step 1: Generate a new migration revision
-alembic revision --autogenerate -m "add_data_classification"
+# Check current migration state
+uv run alembic current                     # What's applied?
+uv run alembic history                     # Full migration chain
 
-# Step 2: Review and edit the generated file
-# File: src/db_migrations/versions/0003_add_data_classification.py
+# Check for conflicting migrations
+uv run alembic check                       # Detect unapplied or conflicting revisions
 ```
 
-```python
-# migration content:
-def upgrade():
-    op.add_column(
-        "data_assets",
-        sa.Column("data_classification", sa.Text(),
-                  server_default="internal"),
-        schema="catalog",
-    )
+**Common Failures & Resolutions:**
 
-def downgrade():
-    op.drop_column("data_assets", "data_classification", schema="catalog")
-```
-
+**Failure A — "relation already exists":**
 ```bash
-# Step 3: Apply the migration
-alembic upgrade head
-
-# Step 4: Verify
-docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
-    -c "\d catalog.data_assets"
-
-# Step 5: Commit the migration file to version control
-git add src/db_migrations/versions/0003_add_data_classification.py
-git commit -m "feat: add data_classification column to data_assets"
+# The migration was partially applied. Mark it as applied without running:
+uv run alembic stamp <revision-id>
 ```
 
-**Rollback procedure:**
+**Failure B — "column referenced in index does not exist" (pgvector):**
+```bash
+# The vector extension may not be loaded. Verify:
+psql -h <aurora-endpoint> -U postgres -d postgres -c "SELECT * FROM pg_extension WHERE extname='vector';"
 
+# If missing, load it (requires rds_superuser):
+psql -h <aurora-endpoint> -U postgres -d postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+**Failure C — Authentication failure:**
+```bash
+# Check the DB credentials in Secrets Manager
+aws secretsmanager get-secret-value \
+    --secret-id $(aws ssm get-parameter --name /dev/platform-medium/db-secret-arn --query Parameter.Value --output text) \
+    --query SecretString --output text | jq .
+
+# Verify alembic.ini sqlalchemy.url is correct
+# For Aurora, use: postgresql+psycopg://catalog_admin:<password>@<host>:5432/postgres
+```
+
+**Rollback Procedure:**
 ```bash
 # Check migration history
-alembic history
+uv run alembic history
 
 # Roll back one step
-alembic downgrade -1
+uv run alembic downgrade -1
 
 # Roll back to a specific revision
-alembic downgrade 0001
+uv run alembic downgrade 0001
+
+# Re-apply after fixing the issue
+uv run alembic upgrade head
 ```
 
-**Important:** Never edit an existing migration that has been applied to production. Always create a new revision.
+> **Rule:** Never edit an applied migration in production. Create a new revision to fix it.
 
-### Runbook 3: Recovering Stuck Agent Execution Loops
+---
 
-**Symptoms:** `agent-loop-stall` alarm firing; CloudWatch log shows repeated "Retry N/3 — routing back to ingestion" messages.
+### RB-003: Stuck Agent Execution Loop
+
+**Severity:** High  
+**Symptoms:** `agent-loop-stall` alarm firing; repeated "Retry N/3" log messages; no catalog entries created in hours.
 
 **Root Causes:**
 - All Bronze data fails quality checks (upstream data quality regression)
-- Bedrock model invocation timeout (throttling)
+- Bedrock throttling (ThrottlingException)
 - pgvector index corruption
 
 **Diagnosis:**
-
 ```bash
-# Step 1: Check the last N agent execution logs
-aws logs tail /langgraph/ai-catalog-agent/dev --since 30m
+# Step 1: Check recent agent execution logs
+aws logs tail /ecs/ai-catalog-agent/dev --since 30m
 
-# Step 2: Check quality run history directly on the DB
-docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
-    -c "SELECT run_id, asset_name, success, score, failed_expectations, execution_secs
-        FROM catalog.quality_runs
-        WHERE run_timestamp > NOW() - INTERVAL '1 hour'
-        ORDER BY run_timestamp DESC;"
+# Step 2: Query quality_runs for recent failures
+# (via ECS task exec or database client)
+aws ecs execute-command \
+    --cluster dev-ai-catalog-ecs \
+    --task <task-id> \
+    --container agent-orchestrator \
+    --command "/bin/bash" \
+    --interactive
+
+# Inside container:
+psql \$DB_URL -c "
+  SELECT run_id, asset_name, success, score, failed_expectations
+  FROM catalog.quality_runs
+  WHERE run_timestamp > NOW() - INTERVAL '1 hour'
+  ORDER BY run_timestamp DESC;"
 
 # Step 3: Check for stuck checkpoints
-docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
-    -c "SELECT thread_id, checkpoint_id, created_at
-        FROM langgraph.checkpoints
-        WHERE created_at > NOW() - INTERVAL '1 hour'
-        ORDER BY created_at DESC;"
+psql \$DB_URL -c "
+  SELECT thread_id, checkpoint_id, created_at
+  FROM langgraph.checkpoints
+  WHERE created_at > NOW() - INTERVAL '1 hour'
+  ORDER BY created_at DESC;"
 ```
 
 **Resolution:**
 
 ```bash
-# Option A: Reset the stuck thread (loses context but unblocks)
-# (Set via environment or DB)
-docker exec -it ai-catalog-pgvector psql -U postgres -d postgres \
-    -c "DELETE FROM langgraph.checkpoints WHERE thread_id = 'stuck-thread-id';"
+# Option A: Clear the stuck thread (loses state but unblocks)
+psql \$DB_URL -c "
+  DELETE FROM langgraph.checkpoints WHERE thread_id = 'stuck-thread-id';"
 
-# Option B: Increase quality threshold temporarily (if upstream issue is known)
-export QUALITY_THRESHOLD=0.80
-python -m src.agents.graph_builder
+# Option B: Temporarily lower quality threshold (if upstream issue is acknowledged)
+# Set ECS environment override and force new deployment
+aws ecs update-service \
+    --cluster dev-ai-catalog-ecs \
+    --service dev-ai-catalog-agent-svc \
+    --force-new-deployment \
+    --environment-overrides name=QUALITY_THRESHOLD,value=0.80
 
-# Option C: Bypass Bedrock (use template descriptions)
-export BEDROCK_DISABLED=true
-python -m src.agents.graph_builder
-
-# Option D: Force-restart the ECS service
+# Option C: Force-restart the ECS service
 aws ecs update-service \
     --cluster dev-ai-catalog-ecs \
     --service dev-ai-catalog-agent-svc \
     --force-new-deployment
+
+# Option D: Bypass Bedrock (use template descriptions if Bedrock is degraded)
+aws ecs update-service \
+    --cluster dev-ai-catalog-ecs \
+    --service dev-ai-catalog-agent-svc \
+    --force-new-deployment \
+    --environment-overrides name=BEDROCK_DISABLED,value=true
 ```
 
 **Prevention:**
-- Configure the `agent_stall` alarm with a PagerDuty integration
-- Set up a CloudWatch Logs Insights query dashboard to monitor retry rates
-- Implement dead-letter handling for persistently failing files (planned feature)
+- Configure `agent-loop-stall` alarm with PagerDuty integration
+- Subscribe the SNS topic to an operational email list
 
-### Runbook 4: Bedrock Rate Limit Management
+---
 
-**Symptoms:** `ThrottlingException` in agent logs; cataloging node fails; `tenacity` retry logs show backoff.
+### RB-004: Reading OpenTelemetry Traces in CloudWatch
+
+**Severity:** Medium  
+**Symptoms:** Need to trace a failed LangGraph node execution across service boundaries.
+
+**Diagnosis:**
+```bash
+# Step 1: Find the trace ID from the agent log
+aws logs insights-query \
+    --log-group-names /ecs/ai-catalog-agent/dev \
+    --query-string "fields @timestamp, @message, @traceId | filter @message like /ERROR|FAIL|exception/ | sort @timestamp desc | limit 20"
+
+# Step 2: Query all spans for a specific trace ID
+aws logs insights-query \
+    --log-group-names /ecs/ai-catalog-agent/dev \
+    --query-string "fields @timestamp, @spanId, @parentSpanId, @message | filter @traceId = '<trace-id>' | sort @timestamp"
+
+# Step 3: Cross-reference with quality pipeline logs
+aws logs insights-query \
+    --log-group-names /quality/gx-runs/dev \
+    --query-string "fields @timestamp, @message | filter @message like /FAIL|quarantine/ | sort @timestamp desc | limit 50"
+```
+
+**CloudWatch Dashboard:**
+- Navigate to CloudWatch → Dashboards → `dev-ai-catalog-dashboard`
+- Widgets show: Agent Performance (success/error counts), Quality Metrics (failures/quarantines), Recent Errors
+
+**Filter patterns for common signals:**
+| Signal | Log Group | Pattern |
+|--------|-----------|---------|
+| Quality failure | `/langgraph/ai-catalog-agent/dev` | `"QUALITY FAIL"` |
+| Quarantine event | `/quality/gx-runs/dev` | `"quarantine"` |
+| Agent crash | `/ecs/ai-catalog-agent/dev` | `"CRITICAL"` or `"Traceback"` |
+| Bedrock throttling | `/ecs/ai-catalog-agent/dev` | `"ThrottlingException"` or `"retry"` |
+
+---
+
+### RB-005: Recovering a Falsely Quarantined Dataset
+
+**Severity:** Medium  
+**Symptoms:** A dataset was quarantined by Great Expectations but subsequent analysis showed the data was valid (false positive GX rule).
+
+**Diagnosis:**
+```bash
+# Step 1: Find the quarantine run
+aws s3 ls s3://ai-catalog-bronze-dev/_quarantine/
+
+# Step 2: Inspect the quarantined data (Parquet)
+aws s3 cp s3://ai-catalog-bronze-dev/_quarantine/<asset_name>/run_id=<run_id>/ ./quarantine/ --recursive
+# Use PySpark or Parquet CLI to inspect
+parquet-tools inspect ./quarantine/
+
+# Step 3: Check what specific expectations failed
+# Query quality_runs table for the run_id
+psql \$DB_URL -c "SELECT validation_json->'results' FROM catalog.quality_runs WHERE run_id = '<run_id>';"
+```
+
+**Resolution:**
+```bash
+# Option A: Manually promote to Silver (if you've verified the data is clean)
+aws s3 cp \
+    s3://ai-catalog-bronze-dev/_quarantine/<asset_name>/run_id=<run_id>/ \
+    s3://ai-catalog-silver-dev/<asset_name>/ \
+    --recursive
+
+# Option B: Relax the false-positive expectation and re-run
+# Edit the expectation suite in gx_suites.py, then run:
+uv run python -m src.data_pipeline.quality.gx_suites \
+    --bronze-path s3://ai-catalog-bronze-dev/<source>/<object>/ \
+    --silver-path s3://ai-catalog-silver-dev/<source>/<object>/ \
+    --suite-name <suite_name> \
+    --expectation-threshold 0.95
+
+# Option C: Re-run with lower threshold if the suite is generally too strict
+uv run python -m src.data_pipeline.quality.gx_suites \
+    --bronze-path s3://ai-catalog-bronze-dev/<source>/<object>/ \
+    --silver-path s3://ai-catalog-silver-dev/<source>/<object>/ \
+    --suite-name <suite_name> \
+    --expectation-threshold 0.80
+```
+
+**Post-Recovery:**
+```bash
+# Update the expectation threshold in the expectation suite to prevent recurrence
+# The validation_json column contains the full run details
+# Adjust the specific expectation in SUITE_REGISTRY and commit
+```
+
+---
+
+### RB-006: Bedrock Throttling / Rate Limiting
+
+**Severity:** Medium  
+**Symptoms:** `ThrottlingException` in logs, cataloging completes slowly, `tenacity` retry logs show backoff.
 
 **Built-in Resilience:**
-
-The cataloging node wraps all Bedrock API calls with `tenacity` retry decorators:
-- `stop_after_attempt=4` — retries up to 4 times
-- `wait_exponential_jitter(initial=1, max=60, jitter=2)` — exponential backoff with jitter
-- Logs each retry attempt at WARNING level
-
-**Tuning:**
+The cataloging node wraps Bedrock API calls with `tenacity`:
 
 ```python
-# In src/agents/nodes/cataloging.py, adjust:
 bedrock_retry = retry(
     retry=retry_if_exception_type(BEDROCK_RETRYABLE),
-    stop=stop_after_attempt(6),        # Increase from 4
-    wait=wait_exponential_jitter(initial=2, max=120, jitter=5),  # Longer backoff
+    stop=stop_after_attempt(4),
+    wait=wait_exponential_jitter(initial=1, max=60, jitter=2),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 ```
 
-### Runbook 5: S3 Data Skew / Large File Handling
+**Tuning (if throttling persists):**
+```python
+# In src/agents/nodes/cataloging.py, adjust parameters:
+bedrock_retry = retry(
+    retry=retry_if_exception_type(BEDROCK_RETRYABLE),
+    stop=stop_after_attempt(6),                  # Increase from 4
+    wait=wait_exponential_jitter(initial=2,       # Longer initial wait
+                                 max=120,          # Higher cap
+                                 jitter=5),        # Larger jitter
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+```
 
-**Symptoms:** Profiling node timeout; ECS task OOM; PySpark driver crash.
+**Emergency bypass:**
+```bash
+# Set environment variable to force all Bedrock calls to fallback mode
+export BEDROCK_DISABLED=true
+uv run python -m src.agents.graph_builder
+
+# Or via ECS:
+aws ecs update-service \
+    --cluster dev-ai-catalog-ecs \
+    --service dev-ai-catalog-agent-svc \
+    --force-new-deployment \
+    --environment-overrides name=BEDROCK_DISABLED,value=true
+```
+
+---
+
+### RB-007: ECS Task Crash / OOM
+
+**Severity:** Critical  
+**Symptoms:** ECS service shows `Task stopped` repeatedly, `MemoryUtilization` > 90%, task exit code 137 (OOM-killed).
 
 **Diagnosis:**
-
 ```bash
-# Check file sizes in Bronze
-aws s3 ls --summarize --human-readable --recursive s3://ai-catalog-bronze-dev/crm/users/
+# Step 1: Check stopped task reason
+aws ecs describe-tasks \
+    --cluster dev-ai-catalog-ecs \
+    --tasks $(aws ecs list-tasks --cluster dev-ai-catalog-ecs --desired-status STOPPED --query 'taskArns[0]' --output text) \
+    --query 'tasks[0].{exitCode: containers[0].exitCode, reason: stoppedReason}'
 
-# Check ECS task resource utilization (CloudWatch metrics)
-# CPUUtilization, MemoryUtilization > 85%
+# Step 2: Check resource utilization
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/ECS \
+    --metric-name MemoryUtilization \
+    --dimensions Name=ServiceName,Value=dev-ai-catalog-agent-svc \
+    --start-time -3600 --end-time 0 --period 60 \
+    --statistics Maximum
+
+# Step 3: Check for large files causing OOM
+aws s3 ls --summarize --human-readable --recursive s3://ai-catalog-bronze-dev/crm/users/
 ```
 
 **Resolution:**
-
 ```yaml
-# Increase ECS task resources in 03-application-dynamic/dev/ecs_tasks.tf:
+# Increase task resources in 03-application-dynamic/dev/ecs_tasks.tf:
 resource "aws_ecs_task_definition" "agent_orchestrator" {
   cpu    = "2048"    # Was 1024
   memory = "6144"    # Was 3072
 }
 ```
 
+```bash
+# Re-apply and force new deployment
+cd infrastructure/03-application-dynamic/dev
+terraform apply
+aws ecs update-service \
+    --cluster dev-ai-catalog-ecs \
+    --service dev-ai-catalog-agent-svc \
+    --force-new-deployment
+```
+
 ---
+
+### RB-008: Recovering from Terraform State Corruption
+
+**Severity:** Critical  
+**Symptoms:** `terraform plan` shows unexpected resource destruction, state lock errors, or `ResourceNotFound` errors.
+
+**Procedure:**
+```bash
+# Step 1: Identify which tier is affected
+cd infrastructure/<affected-tier>/dev
+
+# Step 2: Force unlock if state is stuck
+terraform force-unlock <lock-id>
+
+# Step 3: If state is corrupted, restore from the S3 versioning
+aws s3api list-object-versions \
+    --bucket ai-catalog-terraform-state-<account-id> \
+    --prefix dev/<tier>/tfstate
+
+# Step 4: Restore the previous working version
+aws s3api get-object \
+    --bucket ai-catalog-terraform-state-<account-id> \
+    --key dev/<tier>/tfstate \
+    --version-id <previous-version> \
+    restored.tfstate
+
+# Step 5: Upload restored state (with extreme caution)
+aws s3 cp restored.tfstate s3://ai-catalog-terraform-state-<account-id>/dev/<tier>/tfstate
+
+# Step 6: Re-run plan to verify
+terraform plan
+```
+
+---
+
+### RB-009: uv Lockfile Conflict After Rebase
+
+**Severity:** Low  
+**Symptoms:** `uv sync --frozen` fails in CI with `uv.lock` mismatch; developer sees merge conflicts in `uv.lock`.
+
+**Resolution:**
+```bash
+# Step 1: After rebasing on develop, if uv.lock has conflicts:
+uv lock --no-update  # Re-generate uv.lock from pyproject.toml without upgrading
+# or simply:
+uv lock              # Full re-resolve (fast — typically 1-3 seconds)
+
+# Step 2: Verify the lockfile is consistent
+uv lock --check
+
+# Step 3: Commit the resolved uv.lock
+git add uv.lock
+git commit -m "chore: resolve uv.lock after rebase"
+```
+
+**Prevention:**
+- `uv.lock` is cross-platform and deterministic; most conflicts resolve cleanly with `uv lock --no-update`
+- Unlike `poetry.lock` (which was slow to regenerate), `uv lock` completes in seconds even for large dependency trees
+
+---
+
+### RB-010: Docker Build Failure (uv Sync)
+
+**Severity:** High  
+**Symptoms:** CI pipeline fails at Docker build stage with `uv sync --frozen` error.
+
+**Diagnosis:**
+```bash
+# Step 1: Check if the lockfile is out of sync
+uv lock --check
+
+# Step 2: Test the Docker build locally
+docker build --no-cache -t ai-catalog-agent:test -f Dockerfile .
+
+# Step 3: If the python:3.12-slim image lacks system dependencies, check apt
+docker run --rm python:3.12-slim bash -c "java -version 2>&1 || echo 'JDK missing'"
+```
+
+**Resolution:**
+```bash
+# Option A: If uv.lock needs updating
+uv lock
+git add uv.lock
+git commit -m "fix: update uv.lock for Docker build"
+
+# Option B: If a dependency added a C extension requirement not in Dockerfile
+# Add the missing system package to Dockerfile (both builder and runtime stages)
+# e.g., RUN apt-get install -y libssl-dev
+
+# Option C: Clear Docker build cache and retry
+docker build --no-cache -t ai-catalog-agent:test -f Dockerfile .
+```
+
+---
+
+## Operational Metrics
+
+| Metric | Source | Alert Threshold | Alert Name | Action |
+|--------|--------|----------------|------------|--------|
+| `CatalogSuccessCount` | Agent logs | Sum < 1 in 15min | `agent-loop-stall` | RB-003 |
+| `QualityFailureCount` | Quality logs | Sum > 5 in 10min | `quality-drop` | RB-005 |
+| `AgentErrorCount` | Agent logs | Sum > 10 in 10min | `agent-error-rate` | RB-004 |
+| `MemoryUtilization` | ECS metrics | > 85% avg | `ecs-oom-risk` | RB-007 |
+| `DBConnections` | RDS metrics | > 80% of max | `db-connection-pool` | RB-001 |
+| `CPUUtilization` | ECS metrics | > 90% avg | `ecs-cpu-risk` | RB-007 |
+
+---
+
+## On-Call Checklist
+
+### Initial Triage (First 5 Minutes)
+
+1. **Is the agent loop stalled?** → Check `agent-loop-stall` alarm → RB-003
+2. **Are quality failures spiking?** → Check `quality-drop` alarm → RB-005
+3. **Is the database reachable?** → Check `db-connection-pool` → RB-001
+4. **Are ECS tasks crashing?** → Check `ecs-oom-risk` → RB-007
+
+### Escalation Path
+
+| If | Then |
+|----|------|
+| Single agent node failing | Check logs, restart service |
+| Database unreachable for > 5min | Page DBA / escalate to Platform Lead |
+| Terraform state corrupted | Page Platform Lead (RB-008) |
+| Data loss suspected | Page Data Engineering Lead + CTO |
+
+---
+
+## Appendices
+
+### A — Useful CloudWatch Logs Insights Queries
+
+```sql
+# All errors in the last hour
+fields @timestamp, @message
+| filter @message like /ERROR|CRITICAL|Traceback/
+| sort @timestamp desc
+| limit 50
+
+# Agent performance over time
+stats count() by bin(5m), @message like /Cataloged/
+| filter @message like /Cataloged/
+
+# Quality pass/fail ratio
+stats count() as total, count_if(@message like /QUALITY PASS/) as passed, count_if(@message like /QUALITY FAIL/) as failed
+
+# Bedrock throttling events
+fields @timestamp, @message
+| filter @message like /ThrottlingException|retry_attempt|tenacity/
+| sort @timestamp desc
+```
+
+### B — SSM Parameter Names (Dev Environment)
+
+| Path | Source Tier | Example |
+|------|-------------|---------|
+| `/dev/core-static/vpc-id` | 01-core-static | `vpc-xxx` |
+| `/dev/core-static/private-subnet-ids` | 01-core-static | `subnet-xxx,subnet-yyy` |
+| `/dev/core-static/bronze-bucket-id` | 01-core-static | `ai-catalog-dev-bronze` |
+| `/dev/core-static/silver-bucket-id` | 01-core-static | `ai-catalog-dev-silver` |
+| `/dev/core-static/gold-bucket-id` | 01-core-static | `ai-catalog-dev-gold` |
+| `/dev/core-static/kms-key-arn` | 01-core-static | `arn:aws:kms:...` |
+| `/dev/platform-medium/db-host` | 02-platform-medium | `xxx.cluster-yyy.us-east-1.rds.amazonaws.com` |
+| `/dev/platform-medium/db-secret-arn` | 02-platform-medium | `arn:aws:secretsmanager:...` |
+| `/dev/platform-medium/ecs-cluster-name` | 02-platform-medium | `dev-ai-catalog-ecs` |
+| `/dev/platform-medium/emr-application-id` | 02-platform-medium | `app-xxx` |
+
+### C — Required IAM Permissions for ECS Task Role
+
+```json
+{
+    "Effect": "Allow",
+    "Action": [
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:PutObject"
+    ],
+    "Resource": [
+        "arn:aws:s3:::ai-catalog-*-dev",
+        "arn:aws:s3:::ai-catalog-*-dev/*"
+    ]
+},
+{
+    "Effect": "Allow",
+    "Action": "bedrock:InvokeModel",
+    "Resource": [
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"
+    ]
+},
+{
+    "Effect": "Allow",
+    "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+    ],
+    "Resource": "arn:aws:logs:*:*:log-group:/ecs/ai-catalog-agent/*"
+}
+```
+
+### D — Poetry → uv Command Migration Reference
+
+| Action | Old (Poetry) | New (uv) |
+|--------|-------------|----------|
+| Install dependencies | `poetry install` | `uv sync` |
+| Install production only | `poetry install --only main` | `uv sync --no-group dev` |
+| Add a dependency | `poetry add requests` | `uv add requests` |
+| Add a dev dependency | `poetry add --group dev pytest` | `uv add --group dev pytest` |
+| Remove a dependency | `poetry remove requests` | `uv remove requests` |
+| Update lockfile | `poetry lock` | `uv lock` |
+| Check lockfile | (no direct equivalent) | `uv lock --check` |
+| Run a command in venv | `poetry run pytest` | `uv run pytest` |
+| Activate venv shell | `poetry shell` | `source .venv/bin/activate` |
+| Build a package | `poetry build` | `uv build` |
+| Publish to PyPI | `poetry publish` | `uv publish` |
+| Show dependency tree | `poetry show --tree` | `uv tree`

@@ -1,25 +1,40 @@
-[build-system]
-requires = ["poetry-core>=1.9"]
-build-backend = "poetry.core.masonry.api"
+# =============================================================================
+# pyproject.toml — Enterprise AI-Driven Data Quality & Cataloging Agent
+#
+# MANAGED BY: uv (Astral) — https://docs.astral.sh/uv/
+# BUILD SYSTEM: hatchling (PEP 517)
+# LOCK FILE: uv.lock (committed to VCS)
+# =============================================================================
 
-[tool]
-[tool.poetry]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ── Project Metadata (PEP 621) ────────────────────────────────────────────
+
+[project]
 name = "ai-data-catalog-agent"
 version = "1.0.0"
 description = "Enterprise AI-Driven Data Quality & Cataloging Agent — Medallion Architecture, LangGraph orchestration, Great Expectations validation, pgvector semantic search"
 authors = [
-    "Ansu <ansu@example.com>",
+    { name = "Ansu", email = "ansu@example.com" },
 ]
 maintainers = [
-    "Ansu <ansu@example.com>",
+    { name = "Ansu", email = "ansu@example.com" },
 ]
-package-mode = false
-license = "MIT"
+license = { text = "MIT" }
 readme = "README.md"
-homepage = "https://github.com/your-org/ai-data-catalog-agent"
-repository = "https://github.com/your-org/ai-data-catalog-agent"
-documentation = "https://github.com/your-org/ai-data-catalog-agent/docs"
-keywords = ["data-quality", "data-catalog", "langgraph", "pyspark", "great-expectations", "pgvector", "medallion-architecture"]
+requires-python = ">=3.12,<3.15"
+
+keywords = [
+    "data-quality",
+    "data-catalog",
+    "langgraph",
+    "pyspark",
+    "great-expectations",
+    "pgvector",
+    "medallion-architecture",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -30,59 +45,70 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.12,<3.14"
+dependencies = [
+    # ── Graph Orchestration ─────────────────────────────────────────────────
+    "langgraph>=0.2.0,<0.3.0",
+    "langgraph-checkpoint-postgres>=2.0.0,<3.0.0",
+    # ── Data Processing ─────────────────────────────────────────────────────
+    "pyspark>=3.5.0,<4.0.0",
+    "great-expectations>=1.0.0,<2.0.0",
+    # ── Database & Vector Store ─────────────────────────────────────────────
+    "psycopg2-binary>=2.9.9,<3.0.0",
+    "pgvector>=0.2.5,<0.3.0",
+    "alembic>=1.13.0,<2.0.0",
+    "sqlalchemy>=2.0.25,<3.0.0",
+    # ── AWS Integration ─────────────────────────────────────────────────────
+    "boto3>=1.34.0,<2.0.0",
+    "botocore>=1.34.0,<2.0.0",
+    # ── LLM Resilience ──────────────────────────────────────────────────────
+    "tenacity>=8.2.3,<9.0.0",
+    # ── Telemetry & Observability ──────────────────────────────────────────
+    "opentelemetry-api>=1.24.0,<2.0.0",
+    "opentelemetry-sdk>=1.24.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.24.0,<2.0.0",
+    # ── Configuration ───────────────────────────────────────────────────────
+    "pydantic>=2.6.0,<3.0.0",
+    "pydantic-settings>=2.2.0,<3.0.0",
+    # ── Transformations ─────────────────────────────────────────────────────
+    "dbt-postgres>=1.8.0,<2.0.0",
+    "psycopg-binary>=3.3.4",
+]
 
-# ── Graph Orchestration ─────────────────────────────────────────────────
-langgraph = "^0.2.0"
-langgraph-checkpoint-postgres = "^2.0.0"
+[project.urls]
+Homepage = "https://github.com/your-org/ai-data-catalog-agent"
+Repository = "https://github.com/your-org/ai-data-catalog-agent"
+Documentation = "https://github.com/your-org/ai-data-catalog-agent/docs"
+"Bug Tracker" = "https://github.com/your-org/ai-data-catalog-agent/issues"
+Changelog = "https://github.com/your-org/ai-data-catalog-agent/releases"
 
-# ── Data Processing ─────────────────────────────────────────────────────
-pyspark = "^3.5.0"
-great-expectations = "^1.0.0"
+[project.scripts]
+# CLI entry points
+ai-catalog-agent = "src.agents.graph_builder:main"
+run-quality-check = "src.data_pipeline.quality.gx_suites:main"
 
-# ── Database & Vector Store ─────────────────────────────────────────────
-psycopg2-binary = "^2.9.9"
-pgvector = "^0.2.5"
-alembic = "^1.13.0"
-sqlalchemy = "^2.0.25"
+# ── Development Dependency Groups (PEP 735 via uv) ─────────────────────────
 
-# ── AWS Integration ─────────────────────────────────────────────────────
-boto3 = "^1.34.0"
-botocore = "^1.34.0"
+[dependency-groups]
+dev = [
+    # ── Testing ─────────────────────────────────────────────────────────────
+    "pytest>=8.1.0,<9.0.0",
+    "pytest-cov>=5.0.0,<6.0.0",
+    "pytest-mock>=3.14.0,<4.0.0",
+    "pytest-asyncio>=0.23.0,<1.0.0",
 
-# ── LLM Resilience ──────────────────────────────────────────────────────
-tenacity = "^8.2.3"
+    # ── Linting & Formatting ────────────────────────────────────────────────
+    "ruff>=0.4.0,<1.0.0",
+    "mypy>=1.9.0,<2.0.0",
 
-# ── Telemetry & Observability ──────────────────────────────────────────
-opentelemetry-api = "^1.24.0"
-opentelemetry-sdk = "^1.24.0"
-opentelemetry-exporter-otlp-proto-http = "^1.24.0"
+    # ── Pre-commit ──────────────────────────────────────────────────────────
+    "pre-commit>=3.6.0,<4.0.0",
 
-# ── Configuration ───────────────────────────────────────────────────────
-pydantic = "^2.6.0"
-pydantic-settings = "^2.2.0"
+    # ── Local Dev ───────────────────────────────────────────────────────────
+    "ipython>=8.22.0,<9.0.0",
+    "jupyter>=1.0.0,<2.0.0",
+]
 
-# ── Transformations (dbt is a separate binary, but adapter is Python) ───
-dbt-postgres = "^1.8.0"
-
-[tool.poetry.group.dev.dependencies]
-# ── Testing ─────────────────────────────────────────────────────────────
-pytest = "^8.1.0"
-pytest-cov = "^5.0.0"
-pytest-mock = "^3.14.0"
-pytest-asyncio = "^0.23.0"
-
-# ── Linting & Formatting ────────────────────────────────────────────────
-ruff = "^0.4.0"
-mypy = "^1.9.0"
-
-# ── Pre-commit ──────────────────────────────────────────────────────────
-pre-commit = "^3.6.0"
-
-# ── Local Dev ───────────────────────────────────────────────────────────
-ipython = "^8.22.0"
-jupyter = "^1.0.0"
+# ── Testing Configuration ──────────────────────────────────────────────────
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -118,6 +144,8 @@ exclude_lines = [
     "except Exception as exc:",
 ]
 
+# ── Code Quality ───────────────────────────────────────────────────────────
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -139,11 +167,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 
-[tool.poetry.scripts]
-# CLI entry points
-ai-catalog-agent = "src.agents.graph_builder:main"
-run-quality-check = "src.data_pipeline.quality.gx_suites:main"
+# ── Build Configuration ────────────────────────────────────────────────────
 
-[tool.poetry.urls]
-"Bug Tracker" = "https://github.com/your-org/ai-data-catalog-agent/issues"
-"Changelog" = "https://github.com/your-org/ai-data-catalog-agent/releases"
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

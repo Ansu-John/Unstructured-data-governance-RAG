@@ -19,8 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, Dict, Generator
-from unittest.mock import MagicMock, Mock, patch
+from collections.abc import Generator
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,31 +30,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from langgraph.graph import END
 
 from src.agents.graph_builder import (
+    MAX_RETRIES_PER_FILE,
+    QUALITY_THRESHOLD,
     build_quality_catalog_graph,
     quality_router,
     retry_router,
-    MAX_RETRIES_PER_FILE,
-    QUALITY_THRESHOLD,
 )
+from src.agents.nodes.cataloging import cataloging_node
 from src.agents.nodes.ingestion import ingestion_node
 from src.agents.nodes.profiling import profiling_node
-from src.agents.nodes.cataloging import cataloging_node
 from src.agents.state import (
     AgentState,
-    new_run_state,
-    file_record_to_dict,
-    quality_result_to_dict,
-    profile_result_to_dict,
-    QualityResult,
-    ProfileResult,
     FileRecord,
     ProcessingStatus,
+    ProfileResult,
+    QualityResult,
+    file_record_to_dict,
+    new_run_state,
+    profile_result_to_dict,
+    quality_result_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_bedrock() -> Generator[None, None, None]:
@@ -65,9 +65,9 @@ def mock_bedrock() -> Generator[None, None, None]:
 
         # Mock invoke_model for text generation
         text_response = MagicMock()
-        text_response["body"].read.return_value = json.dumps({
-            "content": [{"text": "Test data asset description from LLM."}]
-        }).encode()
+        text_response["body"].read.return_value = json.dumps(
+            {"content": [{"text": "Test data asset description from LLM."}]}
+        ).encode()
         mock_client.invoke_model.side_effect = [text_response]
         yield
 
@@ -166,6 +166,7 @@ def test_state() -> AgentState:
 # Test: Graph Happy Path (Success Route)
 # ---------------------------------------------------------------------------
 
+
 class TestGraphHappyPath:
     """Verify the full success path through all three nodes."""
 
@@ -191,12 +192,14 @@ class TestGraphHappyPath:
     def test_profiling_node_skips_unvalidated(self, test_state):
         """Profiling node skips files without quality results."""
         # Add a file with no quality result
-        test_state["files"].append({
-            "file_id": "file-003",
-            "file_name": "unvalidated.json",
-            "file_path": "s3://test/unvalidated.json",
-            "status": ProcessingStatus.PENDING.value,
-        })
+        test_state["files"].append(
+            {
+                "file_id": "file-003",
+                "file_name": "unvalidated.json",
+                "file_path": "s3://test/unvalidated.json",
+                "status": ProcessingStatus.PENDING.value,
+            }
+        )
 
         result = profiling_node(test_state)
         assert "profile_results" in result
@@ -227,7 +230,7 @@ class TestGraphHappyPath:
         initial = new_run_state(thread_id="test-full-success")
 
         events = []
-        for event in graph.stream(initial):
+        for event in graph.compile().stream(initial):
             events.append(event)
 
         # Should have at least 3 node events + start/end
@@ -246,6 +249,7 @@ class TestGraphHappyPath:
 # ---------------------------------------------------------------------------
 # Test: Quality Failure & Retry Route
 # ---------------------------------------------------------------------------
+
 
 class TestQualityFailurePath:
     """Verify the quality failure routing and retry logic."""
@@ -290,6 +294,7 @@ class TestQualityFailurePath:
     def test_fail_node_increments_retry(self, test_state):
         """log_fail_and_quarantine node increments retry_count."""
         from src.agents.graph_builder import log_fail_and_quarantine
+
         result = log_fail_and_quarantine(test_state)
         assert result["retry_count"] == test_state.get("retry_count", 0) + 1
         assert len(result["errors"]) > 0
@@ -298,6 +303,7 @@ class TestQualityFailurePath:
 # ---------------------------------------------------------------------------
 # Test: Graph Error Handling
 # ---------------------------------------------------------------------------
+
 
 class TestGraphErrorHandling:
     """Verify edge cases and error behavior."""
@@ -317,7 +323,7 @@ class TestGraphErrorHandling:
         graph = build_quality_catalog_graph()
 
         events = []
-        for event in graph.stream(test_state):
+        for event in graph.compile().stream(test_state):
             events.append(event)
 
         # The graph should complete without raising
@@ -333,6 +339,7 @@ class TestGraphErrorHandling:
 # ---------------------------------------------------------------------------
 # Test: State Serialization
 # ---------------------------------------------------------------------------
+
 
 class TestStateSerialization:
     """Verify AgentState fields are JSON-serializable (checkpointer requirement)."""

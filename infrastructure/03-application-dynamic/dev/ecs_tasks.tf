@@ -32,14 +32,20 @@ resource "aws_ecs_task_definition" "agent_orchestrator" {
         { name = "DB_HOST",               value = local.db_host },
         { name = "DB_NAME",               value = local.db_name },
         { name = "DB_USER",               value = "catalog_admin" },
-        { name = "DB_PASSWORD",           value = "FROM_SECRETS_MANAGER" },
         { name = "BRONZE_S3_PATHS",       value = "s3://${local.bronze_bucket_id}/" },
         { name = "QUALITY_THRESHOLD",     value = "0.95" },
         { name = "AGENT_MAX_RETRIES",     value = "3" },
         { name = "LOG_LEVEL",            value = "INFO" },
         { name = "AWS_REGION",           value = "us-east-1" },
-        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "" },
         { name = "OTEL_SERVICE_NAME",     value = "ai-catalog-agent" },
+        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "https://otlp.cloudwatch.${var.aws_region}.amazonaws.com" },
+      ]
+
+      secrets = [
+        {
+          name      = "DB_PASSWORD"
+          valueFrom = local.db_secret_arn
+        },
       ]
 
       log_configuration = {
@@ -54,7 +60,7 @@ resource "aws_ecs_task_definition" "agent_orchestrator" {
       resource_requirements = []
 
       health_check = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+        command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
@@ -132,10 +138,16 @@ resource "aws_ecs_task_definition" "dbt_runner" {
       environment = [
         { name = "DBT_TARGET",          value = var.environment },
         { name = "DB_HOST",             value = local.db_host },
-        { name = "DB_PORT",             value = "5433" },
+        { name = "DB_PORT",             value = "5432" },
         { name = "DB_NAME",             value = local.db_name },
         { name = "DB_USER",             value = "catalog_admin" },
-        { name = "DB_PASSWORD",         value = "FROM_SECRETS_MANAGER" },
+      ]
+
+      secrets = [
+        {
+          name      = "DB_PASSWORD"
+          valueFrom = local.db_secret_arn
+        },
       ]
 
       log_configuration = {

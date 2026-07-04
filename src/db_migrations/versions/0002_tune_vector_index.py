@@ -36,9 +36,7 @@ def upgrade() -> None:
     in under a second for tables with < 1M rows.
     """
     # Drop existing index
-    op.execute(
-        "DROP INDEX IF EXISTS catalog.idx_data_assets_embedding"
-    )
+    op.execute("DROP INDEX IF EXISTS catalog.idx_data_assets_embedding")
 
     # Recreate with tuned lists parameter
     op.execute(

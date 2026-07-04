@@ -13,6 +13,15 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 
+-- Create the catalog admin role (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'catalog_admin') THEN
+        CREATE ROLE catalog_admin WITH LOGIN PASSWORD 'catalog_admin_dev';
+    END IF;
+END
+$$;
+
 -- Catalog metadata schema ----------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS catalog AUTHORIZATION catalog_admin;
 CREATE SCHEMA IF NOT EXISTS langgraph AUTHORIZATION catalog_admin;
@@ -88,10 +97,18 @@ CREATE INDEX IF NOT EXISTS idx_data_assets_source_system
 CREATE INDEX IF NOT EXISTS idx_data_assets_tags
     ON catalog.data_assets USING GIN (tags);
 
+ALTER TABLE catalog.data_assets 
+    ADD CONSTRAINT data_assets_asset_type_check 
+    CHECK (asset_type IN ('table','view','file','stream','topic','model'));
+
+ALTER TABLE catalog.data_assets 
+    ADD CONSTRAINT uq_data_assets_file_path UNIQUE (file_path);
+
 -- ============================================================================
 -- QUALITY METRICS HISTORY
 -- Immutable log of every Great Expectations validation run.
 -- ============================================================================
+
 
 CREATE TABLE IF NOT EXISTS catalog.quality_runs (
     run_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -144,3 +161,14 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog TO catalog_admin;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA catalog TO catalog_admin;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA langgraph TO catalog_admin;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA langgraph TO catalog_admin;
+
+CREATE TABLE IF NOT EXISTS catalog.quality_runs (
+    run_id VARCHAR(255) PRIMARY KEY,
+    asset_name VARCHAR(255),
+    success BOOLEAN,
+    score NUMERIC,
+    threshold NUMERIC,
+    quarantine_path TEXT,
+    execution_secs NUMERIC,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

@@ -13,8 +13,6 @@ Create Date: 2024-07-01
 
 from __future__ import annotations
 
-from typing import Any
-
 import sqlalchemy as sa
 from alembic import op
 
@@ -27,7 +25,7 @@ depends_on: str | None = None
 def upgrade() -> None:
     """Apply the initial schema."""
     # Enable extensions
-    op.execute('CREATE EXTENSION IF NOT EXISTS vector')
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
 
     # LangGraph checkpoints table
@@ -41,7 +39,9 @@ def upgrade() -> None:
         sa.Column("type", sa.Text(), nullable=True),
         sa.Column("checkpoint", sa.JSON(), nullable=False),
         sa.Column("metadata_", sa.JSON(), nullable=True, server_default="{}"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("thread_id", "checkpoint_ns", "checkpoint_id"),
         schema="langgraph",
     )
@@ -67,7 +67,9 @@ def upgrade() -> None:
     # Data assets table (vector store)
     op.create_table(
         "data_assets",
-        sa.Column("asset_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")),
+        sa.Column(
+            "asset_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")
+        ),
         sa.Column("asset_name", sa.Text(), nullable=False),
         sa.Column("asset_type", sa.Text(), nullable=False),
         sa.Column("source_system", sa.Text(), nullable=False),
@@ -81,8 +83,12 @@ def upgrade() -> None:
         sa.Column("partition_count", sa.Integer(), nullable=True, server_default="0"),
         sa.Column("embedding", sa.Text(), nullable=True),  # will be cast to vector
         sa.Column("metadata_json", sa.JSON(), nullable=True, server_default="{}"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("asset_id"),
         schema="catalog",
     )
@@ -95,41 +101,43 @@ def upgrade() -> None:
     )
     # CONVERT: Change the column type from text to vector(1536)
     # This step is required because you cannot index 'text' as a 'vector'
-    alter_query="""ALTER TABLE catalog.data_assets 
-        ALTER COLUMN embedding TYPE vector(1536) 
+    alter_query = """ALTER TABLE catalog.data_assets
+        ALTER COLUMN embedding TYPE vector(1536)
         USING embedding::vector;
     """
 
     # Add unique constraint on file_path to support ON CONFLICT
     op.execute(
-        "ALTER TABLE catalog.data_assets "
-        "ADD CONSTRAINT uq_data_assets_file_path UNIQUE (file_path)"
+        "ALTER TABLE catalog.data_assets ADD CONSTRAINT uq_data_assets_file_path UNIQUE (file_path)"
     )
-    
+
     print(f"DEBUG: executing query : {alter_query}")
-    op.execute(
-        alter_query
-    )
+    op.execute(alter_query)
     # Add vector index (ivfflat for approximate nearest neighbor)
     # Note: The embedding column needs to be cast to vector type first.
     # This is done in a separate step because Alembic doesn't natively
     # support pgvector.
-    index_query = """CREATE INDEX IF NOT EXISTS idx_data_assets_embedding 
-        ON catalog.data_assets 
-        USING ivfflat (embedding vector_cosine_ops) 
+    index_query = """CREATE INDEX IF NOT EXISTS idx_data_assets_embedding
+        ON catalog.data_assets
+        USING ivfflat (embedding vector_cosine_ops)
         WITH (lists = 100)"""
     print(f"DEBUG: executing query : {index_query}")
-    op.execute(index_query
-        
-    )
+    op.execute(index_query)
 
     # Quality runs table
     op.create_table(
         "quality_runs",
-        sa.Column("run_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")),
+        sa.Column(
+            "run_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")
+        ),
         sa.Column("asset_name", sa.Text(), nullable=False),
         sa.Column("source_path", sa.Text(), nullable=False),
-        sa.Column("run_timestamp", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "run_timestamp",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("success", sa.Boolean(), nullable=False),
         sa.Column("score", sa.Float(), nullable=False, server_default="0.0"),
         sa.Column("threshold", sa.Float(), nullable=False, server_default="0.95"),
@@ -145,7 +153,9 @@ def upgrade() -> None:
     # Agent executions log
     op.create_table(
         "agent_executions",
-        sa.Column("execution_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")),
+        sa.Column(
+            "execution_id", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()")
+        ),
         sa.Column("thread_id", sa.Text(), nullable=False),
         sa.Column("graph_name", sa.Text(), nullable=False, server_default="data_quality_catalog"),
         sa.Column("node_name", sa.Text(), nullable=False),
@@ -154,8 +164,12 @@ def upgrade() -> None:
         sa.Column("output_summary", sa.JSON(), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("duration_ms", sa.Integer(), nullable=True, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("execution_id"),
         schema="catalog",
     )

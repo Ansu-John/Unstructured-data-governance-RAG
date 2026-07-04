@@ -19,12 +19,20 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any
+
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 # OpenTelemetry — best-effort import
 try:
     from opentelemetry import trace
+
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
@@ -46,7 +54,7 @@ DEFAULT_BRONZE_PATHS = [
 ]
 
 
-def ingestion_node(state: AgentState) -> Dict[str, Any]:
+def ingestion_node(state: AgentState) -> dict[str, Any]:
     """
     StateGraph node: Scan Bronze S3 paths for new files and populate
     the 'files' key in AgentState.
@@ -62,8 +70,7 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
     # 1. Rename the variable to clarify it is a context manager, not the span
     span_ctx = tracer.start_as_current_span("ingestion_node") if HAS_OTEL else _NoopSpan()
 
-    
-        # 2. Use 'as span' to capture the actual Span object
+    # 2. Use 'as span' to capture the actual Span object
     with span_ctx as span:
         try:
             bronze_paths = _resolve_bronze_paths()
@@ -87,9 +94,7 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
             # Merge with existing files (avoid duplicates on re-run)
             existing_paths = {f["file_path"] for f in state.get("files", [])}
             new_files = [
-                file_record_to_dict(fr)
-                for fr in discovered
-                if fr.file_path not in existing_paths
+                file_record_to_dict(fr) for fr in discovered if fr.file_path not in existing_paths
             ]
             all_files = list(state.get("files", [])) + new_files
 
@@ -100,7 +105,7 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
             )
             logger.info(summary)
 
-            result: Dict[str, Any] = {
+            result: dict[str, Any] = {
                 "files": all_files,
                 "ingestion_summary": summary,
             }
@@ -122,7 +127,7 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
                 "error": f"ingestion_node: {exc}",
                 "errors": state.get("errors", []) + [f"ingestion_node: {exc}"],
             }
-    # 4. REMOVED the `finally: span.end()` block. 
+    # 4. REMOVED the `finally: span.end()` block.
     # The OpenTelemetry context manager handles ending the span automatically.
     #   finally:
     #       if HAS_OTEL:
@@ -130,8 +135,24 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Retry policy for S3 operations
+# ---------------------------------------------------------------------------
+
+S3_RETRYABLE = (Exception,)
+
+s3_retry = retry(
+    retry=retry_if_exception_type(S3_RETRYABLE),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential_jitter(initial=1, max=30, jitter=2),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _resolve_bronze_paths() -> list[str]:
     """Resolve Bronze S3 prefixes from env or fall back to defaults."""
@@ -141,6 +162,7 @@ def _resolve_bronze_paths() -> list[str]:
     return DEFAULT_BRONZE_PATHS
 
 
+@s3_retry
 def _scan_s3_prefix(prefix: str) -> list[FileRecord]:
     """
     Simulate an S3 prefix scan.
@@ -154,8 +176,10 @@ def _scan_s3_prefix(prefix: str) -> list[FileRecord]:
 
     try:
         import boto3
+
         # Import your centralized settings object
         from src.common.config import settings
+
         session = boto3.Session()
         s3 = session.client(
             "s3",
@@ -181,16 +205,18 @@ def _scan_s3_prefix(prefix: str) -> list[FileRecord]:
                 # Parse Hive partition info
                 source_system, object_type, partition_date = _parse_partition_path(key)
 
-                records.append(FileRecord(
-                    file_path=f"s3://{bucket}/{key}",
-                    file_name=key.split("/")[-1],
-                    file_size_bytes=obj.get("Size", 0),
-                    file_format=key.split(".")[-1] if "." in key else "unknown",
-                    source_system=source_system,
-                    object_type=object_type,
-                    partition_date=partition_date,
-                    status=ProcessingStatus.PENDING,
-                ))
+                records.append(
+                    FileRecord(
+                        file_path=f"s3://{bucket}/{key}",
+                        file_name=key.split("/")[-1],
+                        file_size_bytes=obj.get("Size", 0),
+                        file_format=key.split(".")[-1] if "." in key else "unknown",
+                        source_system=source_system,
+                        object_type=object_type,
+                        partition_date=partition_date,
+                        status=ProcessingStatus.PENDING,
+                    )
+                )
 
     except ImportError:
         logger.warning("boto3 not available — using mock scan")
@@ -207,9 +233,7 @@ def _is_data_file(key: str) -> bool:
     if key.endswith("/"):
         return False
     basename = key.split("/")[-1]
-    if basename.startswith("_") or basename.startswith("."):
-        return False
-    return True
+    return not (basename.startswith("_") or basename.startswith("."))
 
 
 def _parse_partition_path(key: str) -> tuple[str, str, str]:
@@ -275,9 +299,12 @@ def _mock_scan(prefix: str) -> list[FileRecord]:
 class _NoopSpan:
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
     def set_attribute(self, key, value):
         pass
+
     def record_exception(self, exc):
         pass

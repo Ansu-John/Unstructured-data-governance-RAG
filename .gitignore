@@ -15,8 +15,8 @@ build/
 venv/
 env/
 
-# Poetry
-.poetry/
+# uv (Astral)
+.uv/
 
 # IDE
 .idea/
@@ -45,7 +45,10 @@ docker-compose.override.yml
 # Environment files
 .env
 .env.local
-.env.*
+.env.dev
+.env.staging
+.env.prod
+!.env.example
 
 # Logs
 *.log

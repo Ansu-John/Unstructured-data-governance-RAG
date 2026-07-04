@@ -17,18 +17,19 @@ Architectural invariants:
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict
-
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, TypedDict
 
 # ---------------------------------------------------------------------------
 # Enums — typed, serializable
 # ---------------------------------------------------------------------------
 
-class ProcessingStatus(str, Enum):
+
+class ProcessingStatus(StrEnum):
     """Lifecycle status of a file through the pipeline."""
+
     PENDING = "pending"
     INGESTED = "ingested"
     VALIDATED = "validated"
@@ -38,7 +39,7 @@ class ProcessingStatus(str, Enum):
     FAILED = "failed"
 
 
-class DataAssetType(str, Enum):
+class DataAssetType(StrEnum):
     TABLE = "table"
     VIEW = "view"
     FILE = "file"
@@ -51,6 +52,7 @@ class DataAssetType(str, Enum):
 # Domain data models
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FileRecord:
     """
@@ -59,15 +61,16 @@ class FileRecord:
     This is the atomic unit of work in the pipeline — each file flows through
     ingestion -> validation -> profiling -> cataloging independently.
     """
+
     file_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     file_path: str = ""
     file_name: str = ""
     file_size_bytes: int = 0
-    file_format: str = ""           # json, csv, parquet, pdf, txt
+    file_format: str = ""  # json, csv, parquet, pdf, txt
     source_system: str = ""
     object_type: str = ""
-    partition_date: str = ""        # YYYY-MM-DD from the Hive partition
-    discovered_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    partition_date: str = ""  # YYYY-MM-DD from the Hive partition
+    discovered_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     status: ProcessingStatus = ProcessingStatus.PENDING
     error_message: str = ""
 
@@ -79,6 +82,7 @@ class QualityResult:
     Stored in the state dict keyed by file_id so the conditional router
     can make per-file pass/quarantine decisions.
     """
+
     file_id: str = ""
     success: bool = False
     score: float = 0.0
@@ -96,15 +100,16 @@ class ProfileResult:
     Statistical profile computed for a file's schema in the profiling node.
     Used downstream by the cataloging node to populate asset metadata.
     """
+
     file_id: str = ""
-    schema_fields: List[Dict[str, Any]] = field(default_factory=list)
+    schema_fields: list[dict[str, Any]] = field(default_factory=list)
     row_count: int = 0
     column_count: int = 0
-    null_rates: Dict[str, float] = field(default_factory=dict)
-    distinct_rates: Dict[str, float] = field(default_factory=dict)
-    inferred_types: Dict[str, str] = field(default_factory=dict)
-    sample_data: List[Dict[str, Any]] = field(default_factory=list)
-    profile_completed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    null_rates: dict[str, float] = field(default_factory=dict)
+    distinct_rates: dict[str, float] = field(default_factory=dict)
+    inferred_types: dict[str, str] = field(default_factory=dict)
+    sample_data: list[dict[str, Any]] = field(default_factory=list)
+    profile_completed_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 @dataclass
@@ -113,6 +118,7 @@ class CatalogEntry:
     The output of the cataloging node — a single entry written to the vector
     store (catalog.data_assets) with an embedding for semantic search.
     """
+
     file_id: str = ""
     asset_name: str = ""
     asset_type: DataAssetType = DataAssetType.FILE
@@ -121,18 +127,19 @@ class CatalogEntry:
     table_name: str = ""
     file_path: str = ""
     description: str = ""
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     quality_score: float = 0.0
     row_count: int = 0
     partition_count: int = 0
-    embedding: Optional[List[float]] = None  # 1536-dim from Titan Embeddings
+    embedding: list[float] | None = None  # 1536-dim from Titan Embeddings
     metadata_json: dict = field(default_factory=dict)
-    cataloged_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    cataloged_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 # ---------------------------------------------------------------------------
 # AgentState — the LangGraph state schema
 # ---------------------------------------------------------------------------
+
 
 class AgentState(TypedDict, total=False):
     """
@@ -162,17 +169,17 @@ class AgentState(TypedDict, total=False):
 
     run_id: str
     thread_id: str
-    files: List[Dict[str, Any]]
+    files: list[dict[str, Any]]
     current_file_id: str
-    quality_results: Dict[str, Dict[str, Any]]
-    profile_results: Dict[str, Dict[str, Any]]
-    catalog_entries: List[Dict[str, Any]]
+    quality_results: dict[str, dict[str, Any]]
+    profile_results: dict[str, dict[str, Any]]
+    catalog_entries: list[dict[str, Any]]
     ingestion_summary: str
     profiling_summary: str
     cataloging_summary: str
     error: str
     retry_count: int
-    errors: List[str]
+    errors: list[str]
     start_time: str
     end_time: str
 
@@ -180,6 +187,7 @@ class AgentState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # Helper: factory functions
 # ---------------------------------------------------------------------------
+
 
 def new_run_state(thread_id: str | None = None) -> AgentState:
     """Create a blank AgentState for a new graph execution."""
@@ -197,22 +205,22 @@ def new_run_state(thread_id: str | None = None) -> AgentState:
         error="",
         retry_count=0,
         errors=[],
-        start_time=datetime.now(timezone.utc).isoformat(),
+        start_time=datetime.now(UTC).isoformat(),
         end_time="",
     )
 
 
-def file_record_to_dict(fr: FileRecord) -> Dict[str, Any]:
+def file_record_to_dict(fr: FileRecord) -> dict[str, Any]:
     return asdict(fr)
 
 
-def quality_result_to_dict(qr: QualityResult) -> Dict[str, Any]:
+def quality_result_to_dict(qr: QualityResult) -> dict[str, Any]:
     return asdict(qr)
 
 
-def profile_result_to_dict(pr: ProfileResult) -> Dict[str, Any]:
+def profile_result_to_dict(pr: ProfileResult) -> dict[str, Any]:
     return asdict(pr)
 
 
-def catalog_entry_to_dict(ce: CatalogEntry) -> Dict[str, Any]:
+def catalog_entry_to_dict(ce: CatalogEntry) -> dict[str, Any]:
     return asdict(ce)

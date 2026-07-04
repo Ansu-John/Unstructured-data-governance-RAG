@@ -22,8 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tenacity import (
     before_sleep_log,
@@ -35,6 +34,7 @@ from tenacity import (
 
 try:
     from opentelemetry import trace
+
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
@@ -57,8 +57,29 @@ logger = logging.getLogger(__name__)
 
 # Common transient exceptions from Bedrock / boto3
 BEDROCK_RETRYABLE = (
-    Exception,  # broad catch — refined in production with specific boto3 errors
+    ConnectionError,
+    TimeoutError,
+    OSError,
 )
+
+try:
+    from botocore.exceptions import (
+        BotoCoreError,
+        ClientError,
+        ConnectionClosedError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+    )
+
+    BEDROCK_RETRYABLE = BEDROCK_RETRYABLE + (
+        ClientError,
+        ConnectionClosedError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+        BotoCoreError,
+    )
+except ImportError:
+    pass
 
 bedrock_retry = retry(
     retry=retry_if_exception_type(BEDROCK_RETRYABLE),
@@ -73,7 +94,8 @@ bedrock_retry = retry(
 # Cataloging Node
 # ---------------------------------------------------------------------------
 
-def cataloging_node(state: AgentState) -> Dict[str, Any]:
+
+def cataloging_node(state: AgentState) -> dict[str, Any]:
     """
     StateGraph node: Generate catalog entries and write them to pgvector.
 
@@ -88,19 +110,18 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
       - cataloging_summary: str
       - errors: List[str]
     """
-    span_ctx  = tracer.start_as_current_span("cataloging_node") if HAS_OTEL else _NoopSpan()
+    span_ctx = tracer.start_as_current_span("cataloging_node") if HAS_OTEL else _NoopSpan()
 
-    
     with span_ctx as span:
         try:
-            files: List[Dict] = state.get("files", [])
-            profiles: Dict[str, Dict] = state.get("profile_results", {})
-            quality_results: Dict[str, Dict] = state.get("quality_results", {})
-            existing_entries: List[Dict] = list(state.get("catalog_entries", []))
-            errors: List[str] = list(state.get("errors", []))
+            files: list[dict] = state.get("files", [])
+            profiles: dict[str, dict] = state.get("profile_results", {})
+            quality_results: dict[str, dict] = state.get("quality_results", {})
+            existing_entries: list[dict] = list(state.get("catalog_entries", []))
+            errors: list[str] = list(state.get("errors", []))
             existing_file_ids = {e["file_id"] for e in existing_entries}
 
-            new_entries: List[Dict] = []
+            new_entries: list[dict] = []
 
             for f in files:
                 file_id = f["file_id"]
@@ -113,6 +134,7 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
 
                 if profile is None:
                     logger.info("Skipping %s — no profile available", f["file_name"])
+                    errors.append(f"Skipped {f['file_name']}: no profile")
                     continue
 
                 try:
@@ -121,7 +143,9 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
                     new_entries.append(catalog_entry_to_dict(entry))
                     logger.info(
                         "Cataloged '%s' -> vector store (score=%.2f, rows=%d)",
-                        entry.asset_name, entry.quality_score, entry.row_count,
+                        entry.asset_name,
+                        entry.quality_score,
+                        entry.row_count,
                     )
                 except Exception as exc:
                     msg = f"cataloging failed for {f['file_name']}: {exc}"
@@ -137,7 +161,7 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
                 f"Total cataloged: {len(all_entries)}."
             )
 
-            result: Dict[str, Any] = {
+            result: dict[str, Any] = {
                 "catalog_entries": all_entries,
                 "cataloging_summary": summary,
             }
@@ -158,20 +182,21 @@ def cataloging_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "error": f"cataloging_node: {exc}",
                 "errors": state.get("errors", []) + [f"cataloging_node: {exc}"],
-        }
-        #finally:
-            #if HAS_OTEL:
-                #span.end()
+            }
+        # finally:
+        # if HAS_OTEL:
+        # span.end()
 
 
 # ---------------------------------------------------------------------------
 # Entry construction
 # ---------------------------------------------------------------------------
 
+
 def _build_catalog_entry(
-    file_dict: Dict[str, Any],
-    profile_dict: Dict[str, Any],
-    quality_dict: Optional[Dict[str, Any]],
+    file_dict: dict[str, Any],
+    profile_dict: dict[str, Any],
+    quality_dict: dict[str, Any] | None,
 ) -> CatalogEntry:
     """Build a CatalogEntry from the file, profile, and quality data."""
 
@@ -211,8 +236,9 @@ def _build_catalog_entry(
 # LLM-powered description generation
 # ---------------------------------------------------------------------------
 
+
 @bedrock_retry
-def _generate_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any]) -> str:
+def _generate_description(file_dict: dict[str, Any], profile_dict: dict[str, Any]) -> str:
     """
     Generate a rich, human-readable data asset description using Amazon Bedrock
     (Claude 3.5 Sonnet).
@@ -221,8 +247,10 @@ def _generate_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any
     """
     try:
         import boto3
+
         # Import your centralized settings object
         from src.common.config import settings
+
         bedrock = boto3.Session().client(
             "bedrock-runtime",
             region_name=settings.aws_region,
@@ -245,15 +273,17 @@ def _generate_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any
         )
 
         response = bedrock.invoke_model(
-            modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            modelId="anthropic.claude-3-5-haiku-20241022-v1:0",
             contentType="application/json",
             accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 256,
-                "temperature": 0.3,
-                "messages": [{"role": "user", "content": prompt}],
-            }),
+            body=json.dumps(
+                {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 256,
+                    "temperature": 0.3,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+            ),
         )
 
         response_body = json.loads(response["body"].read())
@@ -266,7 +296,7 @@ def _generate_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any
         return _fallback_description(file_dict, profile_dict)
 
 
-def _fallback_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any]) -> str:
+def _fallback_description(file_dict: dict[str, Any], profile_dict: dict[str, Any]) -> str:
     """Template-based fallback when Bedrock is not reachable."""
     fields = profile_dict.get("schema_fields", [])
     field_names = [f.get("name", "?") for f in fields]
@@ -284,8 +314,9 @@ def _fallback_description(file_dict: Dict[str, Any], profile_dict: Dict[str, Any
 # Embedding computation (Amazon Titan Embeddings)
 # ---------------------------------------------------------------------------
 
+
 @bedrock_retry
-def _compute_embedding(text: str) -> List[float]:
+def _compute_embedding(text: str) -> list[float]:
     """
     Compute a 1536-dimension vector embedding using Amazon Titan Embeddings
     (v2) via Bedrock.
@@ -295,22 +326,24 @@ def _compute_embedding(text: str) -> List[float]:
     """
     try:
         import boto3
+
         # Import your centralized settings object
         from src.common.config import settings
+
         bedrock = boto3.Session().client(
             "bedrock-runtime",
             region_name=settings.aws_region,
         )
 
         response = bedrock.invoke_model(
-            modelId="amazon.titan-embed-text-v2:0",
+            modelId="amazon.titan-embed-text-v1",
             contentType="application/json",
             accept="application/json",
-            body=json.dumps({
-                "inputText": text,
-                "dimensions": 1536,
-                "normalize": True,
-            }),
+            body=json.dumps(
+                {
+                    "inputText": text
+                }
+            ),
         )
 
         response_body = json.loads(response["body"].read())
@@ -327,6 +360,7 @@ def _compute_embedding(text: str) -> List[float]:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _infer_asset_type(file_format: str) -> DataAssetType:
     mapping = {
         "json": DataAssetType.FILE,
@@ -339,7 +373,7 @@ def _infer_asset_type(file_format: str) -> DataAssetType:
     return mapping.get(file_format.lower(), DataAssetType.FILE)
 
 
-def _infer_tags(profile_dict: Dict[str, Any], file_dict: Dict[str, Any]) -> List[str]:
+def _infer_tags(profile_dict: dict[str, Any], file_dict: dict[str, Any]) -> list[str]:
     tags = []
     tags.append(file_dict.get("source_system", "unknown"))
     tags.append(file_dict.get("file_format", "unknown"))
@@ -357,6 +391,7 @@ def _infer_tags(profile_dict: Dict[str, Any], file_dict: Dict[str, Any]) -> List
 # Vector store persistence
 # ---------------------------------------------------------------------------
 
+
 def _persist_to_vector_store(entry: CatalogEntry) -> None:
     """
     Write the catalog entry to the pgvector-backed data_assets table.
@@ -368,7 +403,6 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
     """
     try:
         import psycopg2
-        from psycopg2.extras import execute_values
 
         conn = psycopg2.connect(
             host=os.environ.get("DB_HOST", "localhost"),
@@ -378,7 +412,9 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
         )
 
         with conn.cursor() as cur:
-            embedding_str = f"[{','.join(str(v) for v in entry.embedding)}]" if entry.embedding else None
+            embedding_str = (
+                f"[{','.join(str(v) for v in entry.embedding)}]" if entry.embedding else None
+            )
 
             cur.execute(
                 """
@@ -388,7 +424,7 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
                      partition_count, embedding, metadata_json)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s::vector, %s)
-                ON CONFLICT (file_path)   
+                ON CONFLICT (file_path)
                 DO UPDATE SET
                     quality_score = EXCLUDED.quality_score,
                     row_count = EXCLUDED.row_count,
@@ -399,11 +435,19 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
                     updated_at = NOW()
                 """,
                 (
-                    entry.asset_name, entry.asset_type.value, entry.source_system,
-                    entry.schema_name, entry.table_name, entry.file_path,
-                    entry.description, entry.tags, entry.quality_score,
-                    entry.row_count, entry.partition_count,
-                    embedding_str, json.dumps(entry.metadata_json),
+                    entry.asset_name,
+                    entry.asset_type.value,
+                    entry.source_system,
+                    entry.schema_name,
+                    entry.table_name,
+                    entry.file_path,
+                    entry.description,
+                    entry.tags,
+                    entry.quality_score,
+                    entry.row_count,
+                    entry.partition_count,
+                    embedding_str,
+                    json.dumps(entry.metadata_json),
                 ),
             )
             conn.commit()
@@ -419,9 +463,12 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
 class _NoopSpan:
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
     def set_attribute(self, key, value):
         pass
+
     def record_exception(self, exc):
         pass

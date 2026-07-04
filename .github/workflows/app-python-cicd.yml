@@ -9,6 +9,8 @@
 #   3. Build Docker image
 #   4. Push to ECR
 #   5. Deploy to ECS (rolling update with circuit breaker)
+#
+# DEPENDENCY MANAGEMENT: uv (Astral) — https://docs.astral.sh/uv/
 # ============================================================================
 
 name: "App: Python CI/CD"
@@ -22,6 +24,7 @@ on:
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "Dockerfile"
   pull_request:
     branches:
@@ -30,6 +33,7 @@ on:
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
+      - "uv.lock"
 
 permissions:
   id-token: write
@@ -56,24 +60,39 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.5.x"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Start Local Stack (Postgres + LocalStack)
+        run: |
+          cd local_development
+          docker compose up -d
+          # Wait for both services to be healthy
+          until docker compose exec -T postgres pg_isready -d postgres > /dev/null 2>&1; do sleep 2; done
+          until curl -sf http://localhost:4566/_localstack/health | grep -q s3; do sleep 2; done
+          echo "Local stack is ready."
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install poetry
-          poetry install --no-interaction
+        run: uv sync --frozen
+
+      - name: Check Lockfile Freshness
+        run: uv lock --check
 
       - name: Lint with Ruff
-        run: poetry run ruff check src/ tests/
+        run: uv run ruff check src/ tests/
 
       - name: Type Check with MyPy
-        run: poetry run mypy src/ --ignore-missing-imports
+        run: uv run mypy src/ --ignore-missing-imports
         continue-on-error: true
 
       - name: Test with Pytest
         run: |
-          poetry run pytest tests/ \
+          uv run pytest tests/ \
             --cov=src \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -91,6 +110,10 @@ jobs:
         with:
           name: test-results
           path: test-results.xml
+
+      - name: Tear Down Local Stack
+        if: always()
+        run: cd local_development && docker compose down -v
 
   docker-build:
     name: "Build & Push Docker Image"
@@ -112,24 +135,32 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build, Tag, and Push Image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build \
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            --build-arg BUILD_REVISION=${{ github.sha }} \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            -f Dockerfile .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          build-args: |
+            BUILD_DATE=${{ steps.date.outputs.date }}
+            BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output Image URI
+        run: echo "image=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
 
     outputs:
-      image: ${{ steps.build-image.outputs.image }}
+      image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
   deploy-ecs:
     name: "Deploy to ECS"
@@ -145,7 +176,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ecs"
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ecr"
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Download Task Definition

@@ -10,32 +10,27 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Any, Dict
-
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.agents.state import (
-    AgentState,
-    FileRecord,
-    QualityResult,
-    ProfileResult,
     CatalogEntry,
-    ProcessingStatus,
     DataAssetType,
-    new_run_state,
-    file_record_to_dict,
-    quality_result_to_dict,
-    profile_result_to_dict,
+    FileRecord,
+    ProcessingStatus,
+    ProfileResult,
+    QualityResult,
     catalog_entry_to_dict,
+    file_record_to_dict,
+    new_run_state,
+    profile_result_to_dict,
+    quality_result_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tests: FileRecord Data Model
 # ---------------------------------------------------------------------------
+
 
 class TestFileRecord:
     """Verify FileRecord creation, defaults, and serialization."""
@@ -93,6 +88,7 @@ class TestFileRecord:
 # Tests: QualityResult Data Model
 # ---------------------------------------------------------------------------
 
+
 class TestQualityResult:
     """Verify quality result creation and threshold logic."""
 
@@ -147,6 +143,7 @@ class TestQualityResult:
 # Tests: ProfileResult Data Model
 # ---------------------------------------------------------------------------
 
+
 class TestProfileResult:
     """Verify profile result data model."""
 
@@ -191,6 +188,7 @@ class TestProfileResult:
 # ---------------------------------------------------------------------------
 # Tests: CatalogEntry Data Model
 # ---------------------------------------------------------------------------
+
 
 class TestCatalogEntry:
     """Verify catalog entry creation and serialization."""
@@ -246,6 +244,7 @@ class TestCatalogEntry:
 # Tests: AgentState Initialization
 # ---------------------------------------------------------------------------
 
+
 class TestAgentState:
     """Verify AgentState creation and key structure."""
 
@@ -293,6 +292,7 @@ class TestAgentState:
 # Tests: Processing Status Transitions
 # ---------------------------------------------------------------------------
 
+
 class TestStatusTransitions:
     """Verify valid and invalid processing status transitions."""
 
@@ -320,6 +320,7 @@ class TestStatusTransitions:
 # ---------------------------------------------------------------------------
 # Tests: Data Model Helpers
 # ---------------------------------------------------------------------------
+
 
 class TestDataModelHelpers:
     """Verify helper functions on data models."""

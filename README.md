@@ -3,98 +3,166 @@
 **Version:** 1.0.0  
 **Architecture:** Medallion (Bronze → Silver → Gold) + LangGraph State Machine  
 **Stack:** PySpark, Great Expectations, LangGraph, Aurora PostgreSQL + pgvector, Amazon Bedrock  
-**Deployment:** Terraform (3-tier segregated state) + ECS Fargate + EMR Serverless
+**Deployment:** Terraform (3-tier segregated state, SSM-linked) + ECS Fargate + EMR Serverless  
+**Dependency Management:** [uv](https://docs.astral.sh/uv/) by Astral
 
 ---
 
+## System Overview
 
-## System Architecture
+This agent autonomously ingests raw data from S3 Bronze zones, validates it with Great Expectations (strict barrier before Silver), computes statistical profiles via PySpark, generates rich metadata descriptions via Bedrock Claude 3.5 Sonnet, embeds them via Titan Embeddings, and persists searchable catalog entries to a pgvector-powered semantic store.
+
+**Data flow:** `Bronze S3 → GX Validation (pass/fail barrier) → Silver S3 → PySpark Profiling → LLM Cataloging → pgvector Store`
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Automated Data Ingestion** | Discovers new files in S3 Bronze zones, processes them through the LangGraph state machine |
+| **Great Expectations Validation** | Applies configurable expectation suites; routes failures to a quarantine S3 path with structured metadata |
+| **PySpark Profiling** | Computes statistical profiles (row count, null ratios, distinct values, min/max, schema inference) |
+| **LLM-Powered Cataloging** | Generates rich, human-readable metadata descriptions via Amazon Bedrock Claude 3.5 Sonnet |
+| **Semantic Search** | Embeddings via Titan Embeddings v2, stored in pgvector for ANN similarity search |
+| **Stateful Orchestration** | LangGraph with PostgresSaver checkpointer for durable, resumable agent execution |
+| **Observability** | OpenTelemetry tracing routed to CloudWatch; structured logging throughout |
+| **Infrastructure as Code** | 3-tier segregated Terraform state (core-static → platform-medium → app-dynamic) with SSM handoff |
+
+---
+
+## Architecture
+
+### System Topology
 
 ```mermaid
-flowchart LR
-  classDef awsService fill:#ff9900,stroke:#232f3e,stroke-width:2px,color:#000;
-  classDef storage fill:#3f8624,stroke:#232f3e,stroke-width:2px,color:#fff;
-  classDef model fill:#00a4a6,stroke:#232f3e,stroke-width:2px,color:#fff;
-
-  %% Data Ingestion
-  subgraph Ingestion [Data Source Ingestion]
-    direction TB
-    Docs[PDF / Data Files] --> S3_Bronze[(Amazon S3\nBronze Bucket)]:::storage
-  end
-
-  %% EMR Pipeline
-  subgraph EMR [AWS EMR Serverless]
-    direction TB
-    Parse[PDF Parsing & Extraction] --> DQ[Data Quality\nGreat Expectations]
-    DQ --> DBT[SQL Transformations\ndbt Core]
-  end
-
-  %% Agent Orchestration (ECS)
-  subgraph ECS [AWS ECS Fargate - FastAPI]
-    direction TB
-    subgraph LangGraph [LangGraph Agents]
-        direction TB
-        Ingest[Ingestion Agent] --> Profiler[Profiling & DQ Agent]
-        Profiler --> Catalog[Cataloging Agent]
-        Catalog --> Review[Human Review Node]
-        Review --> State[State Management]
-        State -. Condition atov .-> Ingest
+flowchart TD
+    subgraph "Storage Layer (Medallion)"
+        BRONZE["Bronze S3<br/>Raw Landing Zone<br/>Immutable, Partitioned"]
+        SILVER["Silver S3<br/>Cleaned & Validated<br/>Parquet Format"]
+        GOLD["Gold S3<br/>Business-Ready<br/>Optimized for Vector Indexing"]
+        QUARANTINE["Quarantine S3<br/>Failed GX Rows"]
     end
-  end
 
-  %% AI Models
-  subgraph Bedrock [Amazon Bedrock]
-    direction TB
-    Claude[Anthropic Claude\nMetadata Gen/Remediation]:::model
-    Titan[Amazon Titan\nVector Generation]:::model
-  end
+    subgraph "Processing & Orchestration"
+        GX["Great Expectations<br/>Validation Engine<br/>(In-Memory Context)"]
+        SPARK["PySpark<br/>Profile & Transform<br/>(EMR Serverless)"]
+        LANGGRAPH["LangGraph State Machine<br/>Ingestion → Profiling →<br/>Quality Router → Cataloging<br/>(ECS Fargate)"]
+        DBT["dbt Core<br/>Silver → Gold<br/>Transformations"]
+    end
 
-  %% Storage & State
-  subgraph Persistent [Enterprise Storage & Catalog]
-    direction TB
-    S3_Gold[(Amazon S3\nSilver/Gold)]:::storage
-    Aurora[(Aurora PostgreSQL\nState Persistence)]:::storage
-    PgVector[(pgvector\nANN Search)]:::storage
-  end
+    subgraph "AI & Vector Store"
+        BEDROCK["Amazon Bedrock<br/>Claude 3.5 Sonnet<br/>Titan Embeddings v2"]
+        PGVECTOR["Aurora PostgreSQL<br/>+ pgvector<br/>ANN Search & Checkpoints"]
+    end
 
-  %% Consumers
-  subgraph Consumers [Consumers]
-    direction TB
-    UI[Engineer UI\nHuman-in-the-Loop]
-    Glossary[Business Glossaries &\nData Discovery]
-  end
+    subgraph "Observability"
+        OTEL["OpenTelemetry<br/>Tracing & Metrics"]
+        CW["CloudWatch<br/>Logs & Dashboards"]
+    end
 
-  %% Relationships & Routing
-  S3_Bronze -- S3 Event Trigger --> Parse
-  S3_Bronze <--> |Intermediate Chunks| EMR
-  
-  Parse -- Text Chunks/Embeddings --> Ingest
-  
-  DBT <--> |Read/Write| S3_Gold
-  DQ -- Quality Results --> S3_Gold
-  
-  LangGraph <--> |Control LLM| Claude
-  LangGraph <--> |Embeddings Generation| Titan
-  
-  State <--> |LangGraph Checkpointing| Aurora
-  Catalog <--> |Vector Rules & Ops| PgVector
-  
-  LangGraph <--> |Human Review| UI
-  LangGraph --> Glossary
+    BRONZE -->|"New file event"| LANGGRAPH
+    LANGGRAPH -->|"Validate"| GX
+    GX -->|"Pass"| SILVER
+    GX -->|"Fail"| QUARANTINE
+    SILVER -->|"Profile"| SPARK
+    SPARK -->|"Stats"| LANGGRAPH
+    LANGGRAPH -->|"Catalog"| BEDROCK
+    BEDROCK -->|"Embeddings"| PGVECTOR
+    SILVER -->|"Transform"| DBT
+    DBT -->|"Business Views"| GOLD
+    LANGGRAPH -.-> OTEL
+    OTEL -.-> CW
+    SPARK -.-> OTEL
 ```
 
-### Core Stack Decisions
+### LangGraph State Machine Flow
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| **Storage** | S3 (Bronze/Silver/Gold) | Immutable object store with Hive-style partitioning; cost-effective for data lake patterns |
-| **Batch Processing** | PySpark on EMR Serverless | Distributed compute for large-volume Bronze → Silver validation; serverless to avoid idle cluster cost |
-| **Data Quality** | Great Expectations | Declarative expectation suites; native PySpark integration; in-memory ephemeral context avoids deployment overhead |
-| **Orchestration** | LangGraph on ECS Fargate | Stateful graph with Postgres checkpointing; conditional routing for quality gates; retry loops |
-| **Vector Store** | Aurora PostgreSQL + pgvector | Single managed service for both LangGraph state persistence and vector ANN search; no external vector DB to operate |
-| **LLM Integration** | Amazon Bedrock (Claude 3.5 Sonnet + Titan Embeddings) | No GPU infrastructure to manage; native AWS IAM integration; lowest-latency option within VPC |
-| **State Segregation** | Terraform (3 states) | Isolate blast radius: networking changes don't affect DB, DB changes don't affect task definitions |
-| **Schema Migrations** | Alembic | Decouple schema evolution from Terraform; application-owned schema changes without infrastructure review |
-| **Observability** | OpenTelemetry → CloudWatch | Vendor-neutral instrumentation; structured JSON logging for metric extraction via CloudWatch Logs Insights |
+```mermaid
+stateDiagram-v2
+    [*] --> Ingestion: Discover Bronze Files
+    Ingestion --> Profiling: File Loaded
+    Profiling --> QualityRouter: Profile Computed
+    QualityRouter --> Cataloging: Quality Pass
+    QualityRouter --> LogFailAndQuarantine: Quality Fail
+    LogFailAndQuarantine --> RetryRouter: Quarantined
+    RetryRouter --> Ingestion: Retry (< 3 attempts)
+    RetryRouter --> AdvanceFile: Max Retries Exceeded
+    Cataloging --> AdvanceFile: Entry Created
+    AdvanceFile --> Ingestion: More Files
+    AdvanceFile --> [*]: All Files Processed
+```
 
 ---
+
+## Core Stack Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Ephemeral GX Context** | No GX deployment directory needed; history persisted to `catalog.quality_runs` |
+| **3-tier Terraform state** | Blast radius isolation: networking ≠ DB ≠ application code |
+| **SSM parameter handoff** | Stable API contract between tiers (no `terraform_remote_state` coupling) |
+| **pgvector over dedicated DB** | Same Aurora cluster for LangGraph checkpoints + vector ANN search |
+| **tenacity retry wrappers** | Exponential backoff + jitter on Bedrock and S3 calls |
+| **uv (Astral) over Poetry** | 10-100× faster dependency resolution, PEP 621 native, simpler lockfile management |
+| **Multi-stage Docker build** | Minimal production image (~200MB vs ~1GB with full build toolchain) |
+| **Alembic for migrations** | Version-controlled, reversible schema changes; autogenerate from SQLAlchemy models |
+
+---
+
+## Repository Layout
+
+```
+├── .github/workflows/          # CI/CD: 3 infra tiers + 1 app pipeline
+├── infrastructure/
+│   ├── modules/                # Terraform: networking, storage, DB, compute, observability
+│   ├── 01-core-static/dev/     # LIFECYCLE TIER 1: VPC, S3, KMS (SSM→tier 2)
+│   ├── 02-platform-medium/dev/ # LIFECYCLE TIER 2: Aurora, ECS, EMR (SSM→tier 3)
+│   └── 03-application-dynamic/ # LIFECYCLE TIER 3: Task defs, events, alarms
+├── src/
+│   ├── agents/                 # LangGraph state machine (ingestion→profiling→cataloging)
+│   ├── data_pipeline/quality/  # Great Expectations validation engine
+│   ├── data_pipeline/transformations/  # dbt Silver→Gold models
+│   ├── db_migrations/          # Alembic schema migrations
+│   └── common/                 # Config (pydantic) + OpenTelemetry
+├── local_development/          # Docker Compose + init scripts
+├── tests/                      # Unit + integration tests
+├── Dockerfile                  # Multi-stage Docker build (uv-based)
+├── Makefile                    # Dev workflow targets (uv-based)
+├── pyproject.toml              # PEP 621 manifest (uv-managed)
+├── uv.lock                     # Deterministic dependency lockfile
+└── .env.example                # Env template → .env
+```
+
+## Quick Start
+
+```bash
+# Prerequisites: Docker Desktop 4.25+, Python 3.12+, uv 0.5+
+
+# macOS/Linux:
+cp .env.example .env
+make local-up          # Start Postgres+pgvector+LocalStack
+uv sync                # Install dependencies (including dev)
+uv run alembic upgrade head   # Run database migrations
+uv run python -m src.agents.graph_builder  # Run the agent
+make test              # Run tests
+```
+
+```powershell
+# Windows (PowerShell):
+Copy-Item .env.example .env
+cd local_development; docker compose up -d; cd ..
+uv sync
+uv run alembic upgrade head
+uv run python -m src.agents.graph_builder
+uv run pytest -v
+```
+
+## Documentation
+
+- [Development Guide](DevGuide.md) — Adding nodes, expectation suites, local dev workflows, code release process
+- [Operations Runbook](Runbook.md) — Day 1 deployment, Day 2 recovery, Alembic migrations, on-call procedures
+
+## License
+
+MIT

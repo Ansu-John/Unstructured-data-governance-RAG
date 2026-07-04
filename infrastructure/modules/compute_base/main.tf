@@ -138,7 +138,7 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
           "bedrock:InvokeModelWithResponseStream",
         ]
         Resource = [
-          "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/anthropic.claude-3-5-sonnet-*",
+          "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/anthropic.claude-3-5-*",
           "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/amazon.titan-embed-*",
         ]
       },

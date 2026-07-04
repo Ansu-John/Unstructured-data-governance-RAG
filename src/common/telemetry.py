@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def init_telemetry(
     service_name: str = "ai-data-catalog-agent",
     environment: str = "local",
     service_version: str = "1.0.0",
-    otlp_endpoint: Optional[str] = None,
+    otlp_endpoint: str | None = None,
 ) -> None:
     """
     Initialize the OpenTelemetry SDK with OTLP HTTP exporter.
@@ -72,13 +71,15 @@ def init_telemetry(
 
         endpoint = otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-        resource = Resource.create({
-            "service.name": service_name,
-            "service.version": service_version,
-            "deployment.environment": environment,
-            "telemetry.sdk.name": "opentelemetry",
-            "telemetry.sdk.language": "python",
-        })
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.version": service_version,
+                "deployment.environment": environment,
+                "telemetry.sdk.name": "opentelemetry",
+                "telemetry.sdk.language": "python",
+            }
+        )
 
         _tracer_provider = TracerProvider(resource=resource)
 
@@ -89,9 +90,7 @@ def init_telemetry(
             logger.info("OTLP exporter configured: %s", endpoint)
         else:
             # Console exporter for local development
-            _tracer_provider.add_span_processor(
-                BatchSpanProcessor(ConsoleSpanExporter())
-            )
+            _tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
             logger.info("No OTLP endpoint set — using console exporter")
 
         trace.set_tracer_provider(_tracer_provider)
@@ -120,6 +119,7 @@ def get_tracer(module_name: str = __name__):
     """
     try:
         from opentelemetry import trace
+
         return trace.get_tracer(module_name)
     except ImportError:
         return _NoopTracer()
@@ -141,33 +141,43 @@ def shutdown_telemetry() -> None:
 # Noop fallback for environments without OTEL
 # ---------------------------------------------------------------------------
 
+
 class _NoopSpan:
     """Context manager that does nothing — used as fallback."""
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
     def set_attribute(self, key: str, value: object) -> None:
         pass
+
     def set_attributes(self, attributes: dict) -> None:
         pass
+
     def record_exception(self, exc: Exception) -> None:
         pass
-    def add_event(self, name: str, attributes: Optional[dict] = None) -> None:
+
+    def add_event(self, name: str, attributes: dict | None = None) -> None:
         pass
 
 
 class _NoopTracer:
     """Tracer that returns _NoopSpan for all operations."""
-    def start_as_current_span(self, name: str, **kwargs) -> _NoopSpan:
+
+    def start_as_current_span(self, _name: str, **_kwargs) -> _NoopSpan:
         return _NoopSpan()
-    def start_span(self, name: str, **kwargs) -> _NoopSpan:
+
+    def start_span(self, _name: str, **_kwargs) -> _NoopSpan:
         return _NoopSpan()
 
 
 # ---------------------------------------------------------------------------
 # CloudWatch integration helper
 # ---------------------------------------------------------------------------
+
 
 def get_cloudwatch_log_group() -> str:
     """

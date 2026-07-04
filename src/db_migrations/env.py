@@ -21,10 +21,9 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Any
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool, create_engine
+from sqlalchemy import create_engine
 
 # Add the project root to the path for model imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -37,6 +36,7 @@ config = context.config
 # ---------------------------------------------------------------------------
 # Database URL resolution
 # ---------------------------------------------------------------------------
+
 
 def get_database_url() -> str:
     """
@@ -59,6 +59,7 @@ def get_database_url() -> str:
     port = os.environ.get("DB_PORT", "5433")
     name = os.environ.get("DB_NAME", "postgres")
     user = os.environ.get("DB_USER", "postgres")
+    password = os.environ.get("DB_PASSWORD", "")
 
     return f"postgresql://{user}:{password}@{host}:{port}/{name}"
 

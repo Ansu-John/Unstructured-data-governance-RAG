@@ -19,16 +19,21 @@ Design decisions:
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, count, when, isnan, isnull, countDistinct, lit, struct, to_json
+    col,
+    count,
+    countDistinct,
+    isnan,
+    isnull,
+    when,
 )
 
 try:
     from opentelemetry import trace
+
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
@@ -39,15 +44,12 @@ from src.agents.state import (
     AgentState,
     ProfileResult,
     profile_result_to_dict,
-    QualityResult,
-    FileRecord,
-    ProcessingStatus,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def profiling_node(state: AgentState) -> Dict[str, Any]:
+def profiling_node(state: AgentState) -> dict[str, Any]:
     """
     StateGraph node: Profile each file that has a passing QualityResult.
 
@@ -64,12 +66,11 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
     span_ctx = tracer.start_as_current_span("profiling_node") if HAS_OTEL else _NoopSpan()
     with span_ctx as span:
         try:
-        
-            files: List[Dict] = state.get("files", [])
-            quality_results: Dict[str, Dict] = state.get("quality_results", {})
-            existing_profiles: Dict[str, Dict] = state.get("profile_results", {})
-            errors: List[str] = list(state.get("errors", []))
-            profiles: Dict[str, Dict] = dict(existing_profiles)
+            files: list[dict] = state.get("files", [])
+            quality_results: dict[str, dict] = state.get("quality_results", {})
+            existing_profiles: dict[str, dict] = state.get("profile_results", {})
+            errors: list[str] = list(state.get("errors", []))
+            profiles: dict[str, dict] = dict(existing_profiles)
 
             spark = _get_spark()
 
@@ -92,7 +93,9 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
                     profiles[file_id] = profile_result_to_dict(profile)
                     logger.info(
                         "Profiled %s: %d rows, %d columns, null_rate=%.2f",
-                        f["file_name"], profile.row_count, profile.column_count,
+                        f["file_name"],
+                        profile.row_count,
+                        profile.column_count,
                         _avg_null_rate(profile.null_rates),
                     )
                 except Exception as exc:
@@ -107,7 +110,7 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
                 f"Total profiled: {len(profiles)}."
             )
 
-            result: Dict[str, Any] = {
+            result: dict[str, Any] = {
                 "profile_results": profiles,
                 "profiling_summary": summary,
             }
@@ -128,16 +131,17 @@ def profiling_node(state: AgentState) -> Dict[str, Any]:
                 "error": f"profiling_node: {exc}",
                 "errors": state.get("errors", []) + [f"profiling_node: {exc}"],
             }
-        #finally:
-            #if HAS_OTEL:
-            #    span.end()
+        # finally:
+        # if HAS_OTEL:
+        #    span.end()
 
 
 # ---------------------------------------------------------------------------
 # Profile computation internals
 # ---------------------------------------------------------------------------
 
-def _get_spark() -> Optional[SparkSession]:
+
+def _get_spark() -> SparkSession | None:
     """Get or create a SparkSession. Returns None if unavailable."""
     try:
         return SparkSession.builder.appName("ProfilingNode").getOrCreate()
@@ -146,9 +150,9 @@ def _get_spark() -> Optional[SparkSession]:
 
 
 def _compute_profile(
-    spark: Optional[SparkSession],
-    file_dict: Dict[str, Any],
-    qr_dict: Dict[str, Any],
+    spark: SparkSession | None,
+    file_dict: dict[str, Any],
+    _qr_dict: dict[str, Any],
 ) -> ProfileResult:
     """
     Compute a statistical profile for a single file.
@@ -176,22 +180,28 @@ def _spark_profile(spark: SparkSession, path: str, file_id: str) -> ProfileResul
     else:
         df = reader.parquet(path)
 
-    schema_fields = [{"name": f.name, "type": str(f.dataType), "nullable": f.nullable} for f in df.schema]
+    schema_fields = [
+        {"name": f.name, "type": str(f.dataType), "nullable": f.nullable} for f in df.schema
+    ]
     row_count = df.count()
     column_count = len(df.columns)
 
     # Compute null rates per column
-    null_rates: Dict[str, float] = {}
-    distinct_rates: Dict[str, float] = {}
+    null_rates: dict[str, float] = {}
+    distinct_rates: dict[str, float] = {}
 
     if row_count > 0:
         for field in df.schema:
             col_name = field.name
-            null_count = df.select(count(when(isnull(col(col_name)) | isnan(col(col_name)), 1))).collect()[0][0]
+            null_count = df.select(
+                count(when(isnull(col(col_name)) | isnan(col(col_name)), 1))
+            ).collect()[0][0]
             null_rates[col_name] = round(null_count / row_count, 4) if row_count > 0 else 0.0
 
             distinct_count = df.select(countDistinct(col(col_name))).collect()[0][0]
-            distinct_rates[col_name] = round(distinct_count / row_count, 4) if row_count > 0 else 0.0
+            distinct_rates[col_name] = (
+                round(distinct_count / row_count, 4) if row_count > 0 else 0.0
+            )
 
     # Inferred types
     inferred_types = {f["name"]: f["type"] for f in schema_fields}
@@ -211,7 +221,7 @@ def _spark_profile(spark: SparkSession, path: str, file_id: str) -> ProfileResul
     )
 
 
-def _mock_profile(file_dict: Dict[str, Any]) -> ProfileResult:
+def _mock_profile(file_dict: dict[str, Any]) -> ProfileResult:
     """Return a synthetic profile for local dev / testing."""
     return ProfileResult(
         file_id=file_dict["file_id"],
@@ -226,7 +236,13 @@ def _mock_profile(file_dict: Dict[str, Any]) -> ProfileResult:
         column_count=5,
         null_rates={"id": 0.0, "name": 0.02, "email": 0.0, "signup_date": 0.01, "score": 0.15},
         distinct_rates={"id": 1.0, "name": 0.67, "email": 1.0, "signup_date": 0.03, "score": 0.22},
-        inferred_types={"id": "LongType", "name": "StringType", "email": "StringType", "signup_date": "StringType", "score": "DoubleType"},
+        inferred_types={
+            "id": "LongType",
+            "name": "StringType",
+            "email": "StringType",
+            "signup_date": "StringType",
+            "score": "DoubleType",
+        },
         sample_data=[
             {"id": 1, "name": "Alice", "email": "alice@example.com", "score": 95.5},
             {"id": 2, "name": "Bob", "email": "bob@example.com", "score": 87.3},
@@ -234,7 +250,7 @@ def _mock_profile(file_dict: Dict[str, Any]) -> ProfileResult:
     )
 
 
-def _avg_null_rate(null_rates: Dict[str, float]) -> float:
+def _avg_null_rate(null_rates: dict[str, float]) -> float:
     if not null_rates:
         return 0.0
     return sum(null_rates.values()) / len(null_rates)
@@ -243,9 +259,12 @@ def _avg_null_rate(null_rates: Dict[str, float]) -> float:
 class _NoopSpan:
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
     def set_attribute(self, key, value):
         pass
+
     def record_exception(self, exc):
         pass

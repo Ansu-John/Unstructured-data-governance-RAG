@@ -29,34 +29,16 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import Any
-
-
-import sys
-from pathlib import Path
-
-# 1. Dynamically find the root 'Unstructured-data-governance-RAG' folder
-# __file__ is gx_suites.py. We go up 3 levels: quality -> data_pipeline -> src -> root
-project_root = str(Path(__file__).resolve().parents[3])
-
-# 2. Force this root directory to the very front of Python's path list
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# 3. NOW you can safely import your custom modules
-from src.common.config import settings
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import great_expectations as gx
-from great_expectations.core.batch import RuntimeBatchRequest
 from great_expectations.data_context import EphemeralDataContext
 from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.functions import col, lit, when, input_file_name, current_timestamp
-from pyspark.sql.types import (
-    StructType, StructField, StringType, DoubleType, LongType, TimestampType, BooleanType
-)
+from pyspark.sql.functions import current_timestamp, input_file_name, lit
+
+from src.common.config import settings
 
 # ---------------------------------------------------------------------------
 # Logging & Telemetry bootstrap
@@ -90,9 +72,11 @@ except ImportError:
 # Data quality result schema
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class QualityRunResult:
     """Immutable result of a single quality validation run."""
+
     run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     asset_name: str = ""
     source_path: str = ""
@@ -112,6 +96,7 @@ class QualityRunResult:
 # Core validation engine
 # ---------------------------------------------------------------------------
 
+
 class GreatExpectationsValidator:
     """
     Production-grade GX validator that operates entirely in-memory (Ephemeral
@@ -130,10 +115,22 @@ class GreatExpectationsValidator:
     SUITE_REGISTRY: dict[str, list[tuple[str, dict, dict]]] = {
         "crm_users_suite": [
             ("expect_column_values_to_not_be_null", {"column": "id"}, {"priority": "critical"}),
-            ("expect_column_values_to_be_of_type", {"column": "id", "type_": "LongType"}, {"priority": "critical"}),
+            (
+                "expect_column_values_to_be_of_type",
+                {"column": "id", "type_": "LongType"},
+                {"priority": "critical"},
+            ),
             ("expect_column_values_to_not_be_null", {"column": "email"}, {"priority": "critical"}),
-            ("expect_column_values_to_match_regex", {"column": "email", "regex": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"}, {"priority": "high"}),
-            ("expect_column_values_to_be_between", {"column": "score", "min_value": 0.0, "max_value": 100.0}, {"priority": "high"}),
+            (
+                "expect_column_values_to_match_regex",
+                {"column": "email", "regex": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+                {"priority": "high"},
+            ),
+            (
+                "expect_column_values_to_be_between",
+                {"column": "score", "min_value": 0.0, "max_value": 100.0},
+                {"priority": "high"},
+            ),
             ("expect_column_values_to_not_be_null", {"column": "name"}, {"priority": "medium"}),
             ("expect_column_values_to_be_unique", {"column": "id"}, {"priority": "critical"}),
             ("expect_column_values_to_be_unique", {"column": "email"}, {"priority": "high"}),
@@ -141,13 +138,25 @@ class GreatExpectationsValidator:
         "inventory_suite": [
             ("expect_column_values_to_not_be_null", {"column": "sku"}, {"priority": "critical"}),
             ("expect_column_values_to_be_unique", {"column": "sku"}, {"priority": "critical"}),
-            ("expect_column_values_to_be_between", {"column": "quantity", "min_value": 0}, {"priority": "high"}),
-            ("expect_column_values_to_be_between", {"column": "unit_price", "min_value": 0.01}, {"priority": "high"}),
+            (
+                "expect_column_values_to_be_between",
+                {"column": "quantity", "min_value": 0},
+                {"priority": "high"},
+            ),
+            (
+                "expect_column_values_to_be_between",
+                {"column": "unit_price", "min_value": 0.01},
+                {"priority": "high"},
+            ),
         ],
         "default_suite": [
             ("expect_column_values_to_not_be_null", {"column": "id"}, {"priority": "critical"}),
             ("expect_column_to_exist", {"column": "id"}, {"priority": "critical"}),
-            ("expect_column_values_to_be_of_type", {"column": "id", "type_": "LongType"}, {"priority": "high"}),
+            (
+                "expect_column_values_to_be_of_type",
+                {"column": "id", "type_": "LongType"},
+                {"priority": "high"},
+            ),
         ],
     }
 
@@ -161,7 +170,8 @@ class GreatExpectationsValidator:
             logger.warning(
                 "Suite '%s' not found in registry. Falling back to 'default_suite'. "
                 "Available suites: %s",
-                suite_name, list(self.SUITE_REGISTRY.keys()),
+                suite_name,
+                list(self.SUITE_REGISTRY.keys()),
             )
             suite_name = "default_suite"
 
@@ -190,7 +200,7 @@ class GreatExpectationsValidator:
         result = QualityRunResult(
             asset_name=asset_name,
             source_path=source_path,
-            run_timestamp=datetime.now(timezone.utc).isoformat(),
+            run_timestamp=datetime.now(UTC).isoformat(),
             threshold=self.expectation_threshold,
         )
 
@@ -203,46 +213,47 @@ class GreatExpectationsValidator:
             try:
                 self._ensure_context(df, asset_name)
                 gx_df = self._context.data_sources.add_spark_df(name=asset_name, spark_df=df)
-                gx_batch = gx_df.read()
+                gx_df.read()
                 expectations = self.SUITE_REGISTRY[self.suite_name]
 
-                # Execute each expectation and collect results
-                validation_results = []
+                # Build a single expectation suite with all expectations
+                configs = [
+                    ExpectationConfiguration(
+                        type=e[0],
+                        kwargs=e[1],
+                        meta=e[2],
+                    )
+                    for e in expectations
+                ]
+
+                # Run a single checkpoint with the full suite
+                checkpoint = self._context.add_checkpoint(
+                    name=f"{asset_name}_checkpoint",
+                    expectation_suite_name=self.suite_name,
+                    validations=[{"expectation_suite_name": self.suite_name}],
+                )
+                checkpoint_result = checkpoint.run(
+                    expectation_suite_parameters={"expectations": configs},
+                    batch_request=None,
+                )
+
+                # Collect results from the single checkpoint run
                 n_failed = 0
+                validation_results = []
 
-                for exp_type, exp_kwargs, exp_meta in expectations:
-                    exp_config = ExpectationConfiguration(
-                        expectation_type=exp_type,
-                        kwargs={"batch": gx_batch, **exp_kwargs},
-                        meta=exp_meta,
-                    )
-                    exp_result = self._context.run_checkpoint(
-                        expectation_suite_name=self.suite_name,
-                        expectation_configurations=[exp_config],
-                    )
-                    validation_results.append(exp_result)
-
-                    # Determine pass/fail from result
-                    if exp_result.get("success") is False:
+                for suite_result in checkpoint_result.results or []:
+                    validation_results.append(suite_result)
+                    if not suite_result.success:
                         n_failed += 1
 
                 result.total_expectations = len(expectations)
                 result.failed_expectations = n_failed
-                result.score = (
-                    1.0 - (n_failed / len(expectations))
-                    if expectations
-                    else 1.0
-                )
+                result.score = 1.0 - (n_failed / len(expectations)) if expectations else 1.0
                 result.success = result.score >= self.expectation_threshold
                 result.validation_json = {
                     "suite": self.suite_name,
                     "expectations": [
-                        {
-                            "type": e[0],
-                            "kwargs": e[1],
-                            "meta": e[2],
-                        }
-                        for e in expectations
+                        {"type": e[0], "kwargs": e[1], "meta": e[2]} for e in expectations
                     ],
                     "results": [
                         r.to_json_dict() if hasattr(r, "to_json_dict") else str(r)
@@ -253,7 +264,10 @@ class GreatExpectationsValidator:
                 logger.info(
                     "Validation complete: asset=%s score=%.4f threshold=%.4f success=%s "
                     "(%d/%d expectations passed)",
-                    asset_name, result.score, result.threshold, result.success,
+                    asset_name,
+                    result.score,
+                    result.threshold,
+                    result.success,
                     result.total_expectations - result.failed_expectations,
                     result.total_expectations,
                 )
@@ -275,7 +289,7 @@ class GreatExpectationsValidator:
         self,
         df: DataFrame,
         run_result: QualityRunResult,
-        spark: SparkSession,
+        _spark: SparkSession,
     ) -> str:
         """
         Isolate rows that failed validation into the quarantine zone and
@@ -299,7 +313,9 @@ class GreatExpectationsValidator:
             q_df = df.withColumn("_quarantine_run_id", lit(run_result.run_id))
             q_df = q_df.withColumn("_quarantine_timestamp", current_timestamp())
             q_df = q_df.withColumn("_quarantine_score", lit(run_result.score))
-            q_df = q_df.withColumn("_quarantine_reason", lit(run_result.error_message or "threshold_failure"))
+            q_df = q_df.withColumn(
+                "_quarantine_reason", lit(run_result.error_message or "threshold_failure")
+            )
 
             q_df.write.mode("overwrite").parquet(q_path)
             logger.info("Quarantined %d rows to %s", df.count(), q_path)
@@ -311,7 +327,7 @@ class GreatExpectationsValidator:
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    def _ensure_context(self, df: DataFrame, asset_name: str) -> None:
+    def _ensure_context(self, _df: DataFrame, _asset_name: str) -> None:
         """Create or reuse the EphemeralDataContext."""
         if self._context is not None:
             return
@@ -320,19 +336,20 @@ class GreatExpectationsValidator:
         expectations = self.SUITE_REGISTRY[self.suite_name]
         configs = [
             ExpectationConfiguration(
-                expectation_type=e[0],
+                type=e[0],
                 kwargs=e[1],
                 meta=e[2],
             )
             for e in expectations
         ]
-        suite = self._context.add_expectation_suite(
+        self._context.add_expectation_suite(
             expectation_suite_name=self.suite_name,
             expectations=configs,
         )
         logger.info(
             "Initialized ephemeral GX context with suite '%s' (%d expectations)",
-            self.suite_name, len(configs),
+            self.suite_name,
+            len(configs),
         )
 
     def _start_span(self, name: str):
@@ -343,12 +360,16 @@ class GreatExpectationsValidator:
 
 class _NoopSpan:
     """Context manager that does nothing — used when OTEL is absent."""
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
     def set_attribute(self, key, value):
         pass
+
     def record_exception(self, exc):
         pass
 
@@ -357,32 +378,32 @@ class _NoopSpan:
 # Pipeline entrypoint
 # ---------------------------------------------------------------------------
 
+
 def build_spark_session(app_name: str = "DataQualityValidator") -> SparkSession:
     """Build a SparkSession configured for local dev or EMR Serverless."""
     # 1. Base Builder: Your optimized EMR configs + the S3 Drivers
-    builder =  (
-        SparkSession.builder
-        .appName(app_name)
+    builder = (
+        SparkSession.builder.appName(app_name)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.sql.adaptive.advisoryPartitionSizeInBytes", "64MB")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "CORRECTED") 
-        
+        .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "CORRECTED")
         # REQUIRED FOR LOCAL: Download the AWS and Hadoop JARs
-        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262")
-        
+        .config(
+            "spark.jars.packages",
+            "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262",
+        )
         # REQUIRED FOR S3 INTERACTION: Map both s3:// and s3a:// to the modern driver
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") 
+        .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
     )
 
     # 2. LocalStack Overrides: Only applied if the .env file provides a URL
     if settings.aws_endpoint_url:
         builder = (
-            builder
-            .config("spark.hadoop.fs.s3a.endpoint", settings.aws_endpoint_url)
+            builder.config("spark.hadoop.fs.s3a.endpoint", settings.aws_endpoint_url)
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
             .config("spark.hadoop.fs.s3a.access.key", "LOCAL_DEV_AKID")
             .config("spark.hadoop.fs.s3a.secret.key", "LOCAL_DEV_SAK")
@@ -402,7 +423,17 @@ def get_latest_bronze_partitions(
     Returns: list of (full_s3_path, asset_name) tuples.
     """
     try:
-        df = spark.read.parquet(bronze_base_path.rstrip("/") + "/*/*/*/*")
+        bronze_path = bronze_base_path.rstrip("/") + "/*/*/*/*"
+        try:
+            df = spark.read.parquet(bronze_path)
+            df.head(1)
+        except Exception as e:
+            error_msg = str(e)
+            if "CANNOT_READ_FILE_FOOTER" in error_msg or "Parquet" in error_msg:
+                print(f"Parquet read failed. Falling back to JSON for path: {bronze_path}")
+                df = spark.read.json(bronze_path)
+            else:
+                raise e
         paths = df.select(input_file_name().alias("path")).distinct().collect()
         # Group by the object name (one level above year=)
         partitions: dict[str, str] = {}
@@ -413,7 +444,7 @@ def get_latest_bronze_partitions(
                 if seg.startswith("year="):
                     object_name = segments[i - 1] if i > 0 else "unknown"
                     # Keep the most recent (max path lexicographically = newest)
-                    base = "/".join(segments[:i + 3])  # up to day=DD
+                    base = "/".join(segments[: i + 3])  # up to day=DD
                     if object_name not in partitions or base > partitions[object_name]:
                         partitions[object_name] = base
         return [(v, k) for k, v in partitions.items()]
@@ -430,13 +461,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--silver-path", required=True, help="S3 prefix for Silver layer output")
     parser.add_argument("--quarantine-path", default="", help="S3 prefix for quarantine zone")
     parser.add_argument("--suite-name", default="default_suite", help="Expectation suite name")
-    parser.add_argument("--expectation-threshold", type=float, default=0.95, help="Pass threshold [0-1]")
+    parser.add_argument(
+        "--expectation-threshold", type=float, default=0.95, help="Pass threshold [0-1]"
+    )
     parser.add_argument("--asset-name", default="", help="Override auto-detected asset name")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Initialize OpenTelemetry
+    from src.common.telemetry import init_telemetry
+
+    init_telemetry(
+        service_name="ai-catalog-quality",
+        environment=os.environ.get("ENVIRONMENT", "local"),
+    )
+
     logger.info("=" * 72)
     logger.info("Data Quality Validator starting")
     logger.info("  Bronze path:       %s", args.bronze_path)
@@ -463,13 +505,27 @@ def main() -> None:
         logger.info("Processing asset '%s' from %s", asset_name, source_path)
 
         # 1. Read
-        df = spark.read.parquet(source_path)
+        try:
+            df = spark.read.parquet(source_path)
+            df.head(1)
+        except Exception as e:
+            error_msg = str(e)
+            # If it fails because there is no Parquet footer, fall back to JSON (DEV behavior)
+            if "CANNOT_READ_FILE_FOOTER" in error_msg or "Parquet" in error_msg:
+                print(f"Parquet read failed. Falling back to JSON for path: {source_path}")
+                df = spark.read.json(source_path)
+            else:
+                # If it's a different error (like path not found), raise it normally
+                raise e
 
         # 2. Validate
         run_result = validator.validate_dataframe(df, asset_name, source_path)
         logger.info(
             "Result: success=%s score=%.4f (threshold=%.4f) exec_secs=%.2f",
-            run_result.success, run_result.score, run_result.threshold, run_result.execution_secs,
+            run_result.success,
+            run_result.score,
+            run_result.threshold,
+            run_result.execution_secs,
         )
 
         # 3. Route: Silver (pass) or Quarantine (fail)
@@ -497,6 +553,7 @@ def _persist_run_to_db(result: QualityRunResult) -> None:
     """Best-effort write of the run result to the catalog quality_runs table."""
     try:
         import psycopg2
+
         conn = psycopg2.connect(
             host=os.environ.get("DB_HOST", "localhost"),
             port=int(os.environ.get("DB_PORT", "5433")),
@@ -513,11 +570,17 @@ def _persist_run_to_db(result: QualityRunResult) -> None:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    result.run_id, result.asset_name, result.source_path,
-                    result.run_timestamp, result.success, result.score,
-                    result.threshold, result.total_expectations,
+                    result.run_id,
+                    result.asset_name,
+                    result.source_path,
+                    result.run_timestamp,
+                    result.success,
+                    result.score,
+                    result.threshold,
+                    result.total_expectations,
                     result.failed_expectations,
-                    json.dumps(result.validation_json), result.quarantine_path,
+                    json.dumps(result.validation_json),
+                    result.quarantine_path,
                     result.execution_secs,
                 ),
             )

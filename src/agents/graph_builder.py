@@ -51,14 +51,14 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph
+from langgraph.graph.graph import CompiledGraph
 
+from src.agents.nodes.cataloging import cataloging_node
 from src.agents.nodes.ingestion import ingestion_node
 from src.agents.nodes.profiling import profiling_node
-from src.agents.nodes.cataloging import cataloging_node
 from src.agents.state import AgentState, new_run_state
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ QUALITY_THRESHOLD = float(os.environ.get("QUALITY_THRESHOLD", "0.95"))
 # Conditional Router
 # ---------------------------------------------------------------------------
 
+
 def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_quarantine"]:
     """
     Conditional edge function: Inspect the quality result for the currently
@@ -85,7 +86,7 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
     file doesn't block good ones.
     """
     current_file_id = state.get("current_file_id", "")
-    quality_results: Dict[str, Any] = state.get("quality_results", {})
+    quality_results: dict[str, Any] = state.get("quality_results", {})
 
     if not current_file_id or current_file_id not in quality_results:
         logger.info("No specific quality result to evaluate — routing to cataloging")
@@ -98,13 +99,17 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
     if score >= threshold:
         logger.info(
             "QUALITY PASS: file=%s score=%.4f threshold=%.4f → cataloging",
-            current_file_id, score, threshold,
+            current_file_id,
+            score,
+            threshold,
         )
         return "cataloging"
     else:
         logger.warning(
             "QUALITY FAIL: file=%s score=%.4f threshold=%.4f → quarantine",
-            current_file_id, score, threshold,
+            current_file_id,
+            score,
+            threshold,
         )
         return "log_fail_and_quarantine"
 
@@ -117,7 +122,9 @@ def retry_router(state: AgentState) -> Literal["ingestion", END]:
     """
     retry_count = state.get("retry_count", 0)
     if retry_count < MAX_RETRIES_PER_FILE:
-        logger.info("Retry %d/%d — routing back to ingestion", retry_count + 1, MAX_RETRIES_PER_FILE)
+        logger.info(
+            "Retry %d/%d — routing back to ingestion", retry_count + 1, MAX_RETRIES_PER_FILE
+        )
         return "ingestion"
     else:
         logger.error("Max retries (%d) exhausted — terminating graph", MAX_RETRIES_PER_FILE)
@@ -128,7 +135,8 @@ def retry_router(state: AgentState) -> Literal["ingestion", END]:
 # Error / Failure node
 # ---------------------------------------------------------------------------
 
-def log_fail_and_quarantine(state: AgentState) -> Dict[str, Any]:
+
+def log_fail_and_quarantine(state: AgentState) -> dict[str, Any]:
     """
     Node: Log the quality failure, increment retry_count, and record the
     quarantine action. Does NOT perform the actual quarantine (that is done
@@ -139,8 +147,8 @@ def log_fail_and_quarantine(state: AgentState) -> Dict[str, Any]:
     catalog.quality_runs table via the agent_executions log.
     """
     current_file_id = state.get("current_file_id", "")
-    quality_results: Dict[str, Any] = state.get("quality_results", {})
-    errors: List[str] = list(state.get("errors", []))
+    quality_results: dict[str, Any] = state.get("quality_results", {})
+    errors: list[str] = list(state.get("errors", []))
     retry_count = state.get("retry_count", 0)
 
     qr = quality_results.get(current_file_id, {})
@@ -172,10 +180,38 @@ def log_fail_and_quarantine(state: AgentState) -> Dict[str, Any]:
 # Graph assembly
 # ---------------------------------------------------------------------------
 
+
+def advance_file_node(state: AgentState) -> dict[str, Any]:
+    """
+    Node: Advance current_file_id to the next unprocessed file.
+    After all files are processed, sets current_file_id to empty string
+    and the graph terminates.
+    """
+    files: list[dict] = state.get("files", [])
+    catalog_entries: list[dict] = state.get("catalog_entries", [])
+    cataloged_ids = {e["file_id"] for e in catalog_entries}
+
+    # Find the next file that hasn't been cataloged
+    for f in files:
+        if f["file_id"] not in cataloged_ids:
+            logger.info("Advancing to next file: %s (%s)", f["file_name"], f["file_id"])
+            return {
+                "current_file_id": f["file_id"],
+                "retry_count": 0,
+            }
+
+    logger.info("All files processed — terminating graph")
+    return {"current_file_id": ""}
+
+
 def build_quality_catalog_graph() -> StateGraph:
     """
     Assemble the full StateGraph with all nodes, edges, and conditional
     routing.
+
+    The graph loops through each discovered file:
+      advance_file → [ingestion → profiling → (quality_router) →
+                      cataloging|log_fail] → advance_file → ... → END
 
     Returns a compiled StateGraph ready for invocation.
 
@@ -192,6 +228,7 @@ def build_quality_catalog_graph() -> StateGraph:
     workflow.add_node("profiling", profiling_node)
     workflow.add_node("cataloging", cataloging_node)
     workflow.add_node("log_fail_and_quarantine", log_fail_and_quarantine)
+    workflow.add_node("advance_file", advance_file_node)
 
     # ── Edges ───────────────────────────────────────────────────────────
     workflow.set_entry_point("ingestion")
@@ -209,13 +246,27 @@ def build_quality_catalog_graph() -> StateGraph:
         },
     )
 
-    # After cataloging, end
-    workflow.add_edge("cataloging", END)
+    # After cataloging, advance to the next file (or END)
+    workflow.add_conditional_edges(
+        "cataloging",
+        lambda s: "advance_file" if s.get("catalog_entries") else "advance_file",
+        {"advance_file": "advance_file"},
+    )
 
-    # After quarantine logging, either retry or end
+    # After quarantine logging, either retry or advance
     workflow.add_conditional_edges(
         "log_fail_and_quarantine",
         retry_router,
+        {
+            "ingestion": "ingestion",
+            END: "advance_file",
+        },
+    )
+
+    # After advancing, either continue with next file or end
+    workflow.add_conditional_edges(
+        "advance_file",
+        lambda s: "ingestion" if s.get("current_file_id") else END,
         {
             "ingestion": "ingestion",
             END: END,
@@ -225,7 +276,7 @@ def build_quality_catalog_graph() -> StateGraph:
     return workflow
 
 
-def compile_graph_with_checkpointer() -> StateGraph:
+def compile_graph_with_checkpointer() -> CompiledGraph:
     """
     Compile the graph with a PostgresSaver checkpointer for state persistence.
 
@@ -237,14 +288,15 @@ def compile_graph_with_checkpointer() -> StateGraph:
 
     # Attempt Postgres checkpointer — fall back to MemorySaver if DB unreachable
     try:
-        import psycopg2
+        import psycopg
         from langgraph.checkpoint.postgres import PostgresSaver
 
-        conn = psycopg2.connect(
+        conn = psycopg.connect(
             host=os.environ.get("DB_HOST", "localhost"),
             port=int(os.environ.get("DB_PORT", "5433")),
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
+            autocommit=True, # <-- ADD THIS to fix the index error
         )
         checkpointer = PostgresSaver(conn)
         checkpointer.setup()  # Ensure tables exist
@@ -258,6 +310,7 @@ def compile_graph_with_checkpointer() -> StateGraph:
             exc,
         )
         from langgraph.checkpoint.memory import MemorySaver
+
         return workflow.compile(checkpointer=MemorySaver())
 
 
@@ -265,10 +318,11 @@ def compile_graph_with_checkpointer() -> StateGraph:
 # Convenience entrypoint
 # ---------------------------------------------------------------------------
 
+
 def run_graph(
     thread_id: str | None = None,
     bronze_paths: list[str] | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute the full graph end-to-end with a single call.
 
@@ -281,14 +335,14 @@ def run_graph(
     """
     if bronze_paths:
         os.environ["BRONZE_S3_PATHS"] = ",".join(bronze_paths)
-    
+
     # Create the config dict
     config = {"configurable": {"thread_id": thread_id}}
 
     graph = compile_graph_with_checkpointer()
     initial_state = new_run_state(thread_id=thread_id)
 
-    final_state: Dict[str, Any] = {}
+    final_state: dict[str, Any] = {}
     for event in graph.stream(initial_state, config=config):
         logger.debug("Graph event: %s", event)
         # The last event contains the final state
@@ -299,11 +353,57 @@ def run_graph(
 
 
 # ---------------------------------------------------------------------------
+# Healthcheck HTTP server (for ECS task health checks)
+# ---------------------------------------------------------------------------
+
+
+def _start_healthcheck_server() -> None:
+    """
+    Start a minimal HTTP server on port 8080 that responds to /health.
+    This enables the ECS task health check to succeed.
+    """
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status":"healthy"}')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            logger.debug("Healthcheck: %s", fmt % args)
+
+    import threading
+
+    server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Healthcheck server started on port 8080")
+
+
+# ---------------------------------------------------------------------------
 # Module-level quick test
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+
+    # Initialize OpenTelemetry
+    from src.common.telemetry import init_telemetry
+
+    init_telemetry(
+        service_name="ai-catalog-agent",
+        environment=os.environ.get("ENVIRONMENT", "local"),
+    )
+
+    # Start healthcheck for ECS
+    _start_healthcheck_server()
+
     result = run_graph(thread_id="local-test-run")
     print("\n=== FINAL STATE ===")
     print(f"  Files discovered:    {len(result.get('files', []))}")
