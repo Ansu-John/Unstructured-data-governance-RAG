@@ -31,8 +31,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-
 import great_expectations as gx
+import great_expectations.expectations as gxe
+from great_expectations.core.expectation_suite import ExpectationSuite
 from great_expectations.data_context import EphemeralDataContext
 from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
 from pyspark.sql import DataFrame, SparkSession
@@ -212,39 +213,44 @@ class GreatExpectationsValidator:
             t0 = time.perf_counter()
             try:
                 self._ensure_context(df, asset_name)
-                gx_df = self._context.data_sources.add_spark_df(name=asset_name, spark_df=df)
-                gx_df.read()
                 expectations = self.SUITE_REGISTRY[self.suite_name]
 
-                # Build a single expectation suite with all expectations
-                configs = [
-                    ExpectationConfiguration(
-                        type=e[0],
-                        kwargs=e[1],
-                        meta=e[2],
-                    )
-                    for e in expectations
-                ]
+                # 1. Register the Spark Data Asset
+                data_source = self._context.data_sources.add_spark(name=f"{asset_name}_src")
+                data_asset = data_source.add_dataframe_asset(name=asset_name)
+                batch_def = data_asset.add_batch_definition_whole_dataframe("batch_def")
 
-                # Run a single checkpoint with the full suite
-                checkpoint = self._context.add_checkpoint(
+                # 2. Retrieve the pre-registered suite
+                suite = self._context.suites.get(self.suite_name)
+
+                # 3. Create a Validation Definition (maps the data to the suite)
+                val_def = gx.ValidationDefinition(
+                    name=f"{asset_name}_validation",
+                    data=batch_def,
+                    suite=suite,
+                )
+                self._context.validation_definitions.add(val_def)
+
+                # 4. Create and run the Checkpoint
+                checkpoint = gx.Checkpoint(
                     name=f"{asset_name}_checkpoint",
-                    expectation_suite_name=self.suite_name,
-                    validations=[{"expectation_suite_name": self.suite_name}],
+                    validation_definitions=[val_def],
                 )
-                checkpoint_result = checkpoint.run(
-                    expectation_suite_parameters={"expectations": configs},
-                    batch_request=None,
-                )
+                self._context.checkpoints.add(checkpoint)
 
-                # Collect results from the single checkpoint run
+                # We pass the actual Spark DataFrame at runtime here
+                checkpoint_result = checkpoint.run(batch_parameters={"dataframe": df})
+
+                # 5. Collect results from the single checkpoint run
                 n_failed = 0
                 validation_results = []
 
-                for suite_result in checkpoint_result.results or []:
-                    validation_results.append(suite_result)
-                    if not suite_result.success:
-                        n_failed += 1
+                # In GX 1.0, results are stored in a dictionary of run_results
+                for val_result in checkpoint_result.run_results.values():
+                    for exp_result in val_result.results:
+                        validation_results.append(exp_result)
+                        if not exp_result.success:
+                            n_failed += 1
 
                 result.total_expectations = len(expectations)
                 result.failed_expectations = n_failed
@@ -332,24 +338,33 @@ class GreatExpectationsValidator:
         if self._context is not None:
             return
         self._context = gx.get_context(mode="ephemeral")
-        # Register the expectation suite
+
+        # Register the expectation suite (GX 1.0 API)
+        suite = ExpectationSuite(name=self.suite_name)
         expectations = self.SUITE_REGISTRY[self.suite_name]
-        configs = [
-            ExpectationConfiguration(
-                type=e[0],
-                kwargs=e[1],
-                meta=e[2],
-            )
-            for e in expectations
-        ]
-        self._context.add_expectation_suite(
-            expectation_suite_name=self.suite_name,
-            expectations=configs,
-        )
+
+        for e in expectations:
+            exp_name = e[0]   # e.g., "expect_column_values_to_not_be_null"
+            kwargs = e[1]     # e.g., {"column": "id"}
+            meta = e[2]       # e.g., {"priority": "critical"}
+
+            # Convert snake_case string to CamelCase class name
+            # "expect_column_values_to_not_be_null" -> "ExpectColumnValuesToNotBeNull"
+            class_name = "".join(word.capitalize() for word in exp_name.split("_"))
+
+            # Fetch the actual expectation class dynamically from the gxe module
+            ExpectationClass = getattr(gxe, class_name)
+
+            # Instantiate the object and add it to the suite
+            suite.add_expectation(ExpectationClass(**kwargs, meta=meta))
+
+        # Explicitly add the suite to the context
+        self._context.suites.add(suite)
+
         logger.info(
             "Initialized ephemeral GX context with suite '%s' (%d expectations)",
             self.suite_name,
-            len(configs),
+            len(expectations),
         )
 
     def _start_span(self, name: str):
