@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_checkpoint_writes_lookup
 CREATE TABLE IF NOT EXISTS catalog.data_assets (
     asset_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     asset_name      TEXT        NOT NULL,
-    asset_type      TEXT        NOT NULL CHECK (asset_type IN ('table','view','file','stream','topic','model')),
+    asset_type      TEXT        NOT NULL,
     source_system   TEXT        NOT NULL,
     schema_name     TEXT,
     table_name      TEXT,
