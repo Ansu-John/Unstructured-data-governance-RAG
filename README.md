@@ -4,6 +4,7 @@
 **Architecture:** Medallion (Bronze → Silver → Gold) + LangGraph State Machine  
 **Stack:** PySpark, Great Expectations, LangGraph, Aurora PostgreSQL + pgvector, Amazon Bedrock  
 **Deployment:** Terraform (3-tier segregated state, SSM-linked) + ECS Fargate + EMR Serverless  
+**Container Registry:** Amazon ECR (auto-provisioned via Terraform, scan-on-push, lifecycle-managed)  
 **Dependency Management:** [uv](https://docs.astral.sh/uv/) by Astral
 
 ---
@@ -28,6 +29,8 @@ This agent autonomously ingests raw data from S3 Bronze zones, validates it with
 | **Stateful Orchestration** | LangGraph with PostgresSaver checkpointer for durable, resumable agent execution |
 | **Observability** | OpenTelemetry tracing routed to CloudWatch; structured logging throughout |
 | **Infrastructure as Code** | 3-tier segregated Terraform state (core-static → platform-medium → app-dynamic) with SSM handoff |
+| **Container Registry** | Amazon ECR with automated vulnerability scanning, lifecycle policies (14-day untagged expiry), KMS encryption, and least-privilege IAM |
+| **CI/CD Infrastructure Gate** | Pre-build validation ensures all AWS resources exist before the pipeline spends time building and pushing Docker images |
 
 ---
 
@@ -51,6 +54,11 @@ flowchart TD
         DBT["dbt Core<br/>Silver → Gold<br/>Transformations"]
     end
 
+    subgraph "Container Registry & CI/CD"
+        ECR["Amazon ECR<br/>Docker Image Registry<br/>Scan-on-Push + Lifecycle<br/>KMS Encryption"]
+        CICD["GitHub Actions<br/>Infra Check → Build →<br/>Push → Scan → Deploy"]
+    end
+
     subgraph "AI & Vector Store"
         BEDROCK["Amazon Bedrock<br/>Claude 3.5 Sonnet<br/>Titan Embeddings v2"]
         PGVECTOR["Aurora PostgreSQL<br/>+ pgvector<br/>ANN Search & Checkpoints"]
@@ -71,6 +79,8 @@ flowchart TD
     BEDROCK -->|"Embeddings"| PGVECTOR
     SILVER -->|"Transform"| DBT
     DBT -->|"Business Views"| GOLD
+    CICD -->|"Push Image"| ECR
+    ECR -->|"Pull Image"| LANGGRAPH
     LANGGRAPH -.-> OTEL
     OTEL -.-> CW
     SPARK -.-> OTEL
@@ -107,17 +117,19 @@ stateDiagram-v2
 | **uv (Astral) over Poetry** | 10-100× faster dependency resolution, PEP 621 native, simpler lockfile management |
 | **Multi-stage Docker build** | Minimal production image (~200MB vs ~1GB with full build toolchain) |
 | **Alembic for migrations** | Version-controlled, reversible schema changes; autogenerate from SQLAlchemy models |
+| **ECR scan-on-push + lifecycle** | Every image is vulnerability-scanned at push; untagged images auto-expire after 14 days to control costs |
+| **CI/CD infra validation gate** | Pre-build check prevents wasting build minutes on missing infrastructure; fails fast with actionable error messages |
 
 ---
 
 ## Repository Layout
 
 ```
-├── .github/workflows/          # CI/CD: 3 infra tiers + 1 app pipeline
+├── .github/workflows/          # CI/CD: 3 infra tiers + 1 app pipeline (with infra check gate)
 ├── infrastructure/
-│   ├── modules/                # Terraform: networking, storage, DB, compute, observability
+│   ├── modules/                # Terraform: networking, storage, DB, compute, observability, repository
 │   ├── 01-core-static/dev/     # LIFECYCLE TIER 1: VPC, S3, KMS (SSM→tier 2)
-│   ├── 02-platform-medium/dev/ # LIFECYCLE TIER 2: Aurora, ECS, EMR (SSM→tier 3)
+│   ├── 02-platform-medium/dev/ # LIFECYCLE TIER 2: Aurora, ECS, EMR, ECR, IAM (SSM→tier 3)
 │   └── 03-application-dynamic/ # LIFECYCLE TIER 3: Task defs, events, alarms
 ├── src/
 │   ├── agents/                 # LangGraph state machine (ingestion→profiling→cataloging)
@@ -160,8 +172,8 @@ uv run pytest -v
 
 ## Documentation
 
-- [Development Guide](DevGuide.md) — Adding nodes, expectation suites, local dev workflows, code release process
-- [Operations Runbook](Runbook.md) — Day 1 deployment, Day 2 recovery, Alembic migrations, on-call procedures
+- [Development Guide](DevGuide.md) — Adding nodes, expectation suites, local dev workflows, code release process, Terraform module creation
+- [Operations Runbook](Runbook.md) — Day 1 deployment, Day 2 recovery, Alembic migrations, ECR lifecycle management, on-call procedures
 
 ## License
 

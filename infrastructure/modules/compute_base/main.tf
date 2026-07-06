@@ -152,6 +152,17 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
           "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.environment}-ai-catalog-*"
         ]
       },
+      {
+        Sid      = "ECRPullForTaskExecution"
+        Effect   = "Allow"
+        Action   = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+        ]
+        Resource = ["*"]
+      },
     ]
   })
 }

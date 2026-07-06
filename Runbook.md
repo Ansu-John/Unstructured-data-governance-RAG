@@ -14,7 +14,7 @@ Before the first deployment, an SRE must provision:
 
 1. **S3 State Bucket:** `ai-catalog-terraform-state-<account-id>` (created outside Terraform)
 2. **DynamoDB Lock Table:** `ai-catalog-terraform-locks` (created outside Terraform)
-3. **GitHub OIDC Provider:** IAM role for GitHub Actions with trust to the repo
+3. **GitHub OIDC Provider:** IAM role for GitHub Actions with trust to the repo (`github-actions-terraform-role`)
 
 ### Bootstrap Validation
 
@@ -28,6 +28,8 @@ aws iam get-role --role-name github-actions-terraform-role --query 'Role.Arn'
 ### Deployment Sequence (MANDATORY ORDER)
 
 > **WARNING:** These three tiers MUST be deployed in order. Each tier reads SSM parameters published by the previous tier. Deploying out of order causes unresolvable `data.aws_ssm_parameter` errors.
+>
+> **IMPORTANT CHANGE:** Tier 2 now also provisions the ECR repository. The `app-python-cicd.yml` pipeline will **fail** at the `infra-check` gate if the ECR repository does not exist. Terraform MUST be applied before any application code is pushed to `main`.
 
 #### Tier 1: Core Static (Network + Storage)
 
@@ -67,10 +69,10 @@ aws s3 ls s3://$(aws ssm get-parameter --name /dev/core-static/bronze-bucket-id 
 aws ec2 describe-vpcs --vpc-ids $(aws ssm get-parameter --name /dev/core-static/vpc-id --query Parameter.Value --output text)
 ```
 
-#### Tier 2: Platform Medium (Database + Compute)
+#### Tier 2: Platform Medium (Database + Compute + ECR)
 
 **Change frequency:** 2–4 changes per month  
-**Blast radius:** Medium (database resizing, EMR config changes)  
+**Blast radius:** Medium (database resizing, EMR config changes, ECR lifecycle)  
 **State key:** `dev/platform-medium/tfstate`
 
 ```bash
@@ -85,10 +87,16 @@ terraform apply tfplan
 - Aurora Serverless v2 PostgreSQL cluster (0.5–4 ACU) with pgvector
 - ECS Cluster (Fargate) with Container Insights
 - EMR Serverless Application (Spark 3.5)
+- **ECR Repository** (`ai-catalog-agent`) with:
+  - Image scanning on push (vulnerability detection)
+  - Lifecycle policy (14-day untagged image expiry, 1000-image cap)
+  - KMS encryption (AES-256 default, KMS CMK if available)
+  - Repository policy (least-privilege push/pull for CI/CD and ECS roles)
+- **IAM Policies** for CI/CD role (ECR push + ECS deploy permissions)
 - CloudWatch Log Groups, Metric Filters, Alarms, Dashboard
 - SNS Topic for alarm notifications
 
-**SSM outputs published:**
+**SSM outputs published (NEW for ECR marked ★):**
 | Parameter | Purpose |
 |-----------|---------|
 | `/dev/platform-medium/db-host` | Aurora writer endpoint |
@@ -98,6 +106,9 @@ terraform apply tfplan
 | `/dev/platform-medium/ecs-cluster-name` | ECS cluster name |
 | `/dev/platform-medium/ecs-task-execution-role-arn` | Task execution IAM role |
 | `/dev/platform-medium/emr-application-id` | EMR Serverless app ID |
+| ★ `/dev/platform-medium/ecr-repository-url` | ECR repository URL (e.g., `<account>.dkr.ecr.us-east-1.amazonaws.com/ai-catalog-agent`) |
+| ★ `/dev/platform-medium/ecr-repository-arn` | ECR repository ARN |
+| ★ `/dev/platform-medium/ecr-repository-name` | ECR repository name (`ai-catalog-agent`) |
 
 **Verification:**
 ```bash
@@ -109,6 +120,14 @@ aws rds describe-db-instances \
 # Test DB connectivity (requires VPN or bastion)
 psql -h $(aws ssm get-parameter --name /dev/platform-medium/db-host --query Parameter.Value --output text) \
     -U postgres -d postgres -c "SELECT extname FROM pg_extension;"
+
+# Verify ECR repository was created
+aws ecr describe-repositories --repository-names ai-catalog-agent \
+    --query 'repositories[0].{name: repositoryName, uri: repositoryUri, scanOnPush: imageScanningConfiguration.scanOnPush}'
+
+# Verify ECR lifecycle policy
+aws ecr get-lifecycle-policy --repository-name ai-catalog-agent \
+    --query 'lifecyclePolicyText' --output text
 ```
 
 #### Tier 3: Application Dynamic (Tasks + Events)
@@ -151,13 +170,70 @@ aws ecs describe-services \
 | Action | Tag | Pipeline |
 |--------|-----|----------|
 | Network/Storage change | `v1.2.3-core` | `infra-01-static.yml` |
-| Platform change | `v1.2.3-platform` | `infra-02-platform.yml` |
+| Platform change (incl. ECR) | `v1.2.3-platform` | `infra-02-platform.yml` |
 | App change | `v1.2.3-app` | `infra-03-app-dynamic.yml` |
 | Push to `main` | (automatic) | `app-python-cicd.yml` |
+
+> **NEW:** Before the app pipeline runs `docker-build`, it now executes an `infra-check` job that validates the ECR repository, ECS cluster, and ECS service all exist. If infrastructure is missing, the pipeline fails immediately with a clear error message pointing to the exact Terraform command to run — no more waiting 10 minutes for tests to pass only to fail at push time.
 
 ---
 
 ## Day 2: Operations Runbooks
+
+### RB-000: ECR Repository Issues
+
+**Severity:** High  
+**Symptoms:** CI/CD pipeline fails at `infra-check` job with "ECR repository not found" or at docker push step.
+
+**Root Causes:**
+- Tier 2 Terraform not applied before app push
+- Accidental deletion of the ECR repository
+- Lifecycle policy expired all images in use
+- ECR repository policy drift
+
+**Diagnosis:**
+```bash
+# Step 1: Check if the repository exists
+aws ecr describe-repositories --repository-names ai-catalog-agent \
+    --query 'repositories[0].repositoryUri'
+
+# Step 2: Check lifecycle policy
+aws ecr get-lifecycle-policy --repository-name ai-catalog-agent
+
+# Step 3: Check repository policy (permissions)
+aws ecr get-repository-policy --repository-name ai-catalog-agent \
+    --query 'policyText' --output text
+
+# Step 4: List images in the repository
+aws ecr list-images --repository-name ai-catalog-agent \
+    --query 'imageIds[?imageTag==`null`]' --max-items 20
+```
+
+**Resolution:**
+```bash
+# Option A: Apply Terraform to recreate/repair the repository
+cd infrastructure/02-platform-medium/dev
+terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+
+# Option B: If the repository was deleted, check Terraform state
+terraform state list | grep ecr_repository
+# If the resource is still in state but deleted externally:
+terraform apply   # Terraform will recreate it
+
+# Option C: Manually force image lifecycle policy evaluation
+aws ecr start-lifecycle-policy-preview --repository-name ai-catalog-agent
+aws ecr start-image-scan --repository-name ai-catalog-agent \
+    --image-id imageTag=latest
+```
+
+**Prevention:**
+- The `infra-check` job in `app-python-cicd.yml` catches missing ECR repos before build
+- IAM policies restrict ECR deletion to the Terraform role only
+- Enable Terraform state versioning for recovery (S3 bucket versioning)
+
+---
 
 ### RB-001: Database Connection Loss
 
@@ -629,6 +705,95 @@ docker build --no-cache -t ai-catalog-agent:test -f Dockerfile .
 
 ---
 
+### RB-011: ECR Vulnerability Scan — Critical Finding
+
+**Severity:** High  
+**Symptoms:** ECR image scan reports CRITICAL or HIGH vulnerabilities; security team requires remediation before deployment.
+
+**Diagnosis:**
+```bash
+# Step 1: Get scan results for the latest image
+aws ecr describe-image-scan-findings \
+    --repository-name ai-catalog-agent \
+    --image-id imageTag=latest \
+    --query 'imageScanFindings.{severityCounts: findingSeverityCounts, findings: findings[?severity==`CRITICAL` || severity==`HIGH`]}' \
+    --output json
+
+# Step 2: Check if the vulnerabilities are in base image or application deps
+# The scan output includes 'name' (CVE), 'uri', and 'attributes' with package info
+```
+
+**Resolution:**
+```bash
+# Option A: Rebuild with updated base image (patch the base image tag in Dockerfile)
+# Update FROM python:3.12-slim-bookworm to latest security patch
+docker build --no-cache -t ai-catalog-agent:fixed -f Dockerfile .
+docker tag ai-catalog-agent:fixed <ecr-url>/ai-catalog-agent:fixed
+docker push <ecr-url>/ai-catalog-agent:fixed
+
+# Option B: If vulnerabilities are in application dependencies, update and rebuild
+uv lock --upgrade-package <affected-package>
+git add uv.lock pyproject.toml
+git commit -m "fix: upgrade <package> to resolve CVE-xxxx"
+
+# Option C: Accept the risk (if vulnerabilities are in the base image and no patch exists)
+# File a security exception and track the CVE
+```
+
+**Prevention:**
+- ECR `scan_on_push = true` ensures every image is scanned as it's pushed
+- Use minimal base images (`python:3.12-slim-bookworm` instead of `python:3.12`)
+- The CI/CD pipeline includes an `infra-check` step that waits for scan completion and reports findings
+
+---
+
+### RB-012: ECR Lifecycle Policy — Accidental Image Expiry
+
+**Severity:** Medium  
+**Symptoms:** A specific image tag used in a running ECS task was deleted by the lifecycle policy; rollback to a specific version fails.
+
+**Diagnosis:**
+```bash
+# Step 1: Check what images remain in the repository
+aws ecr list-images --repository-name ai-catalog-agent \
+    --query 'imageIds[*].imageTag' --output json
+
+# Step 2: Check lifecycle policy execution history
+aws ecr get-lifecycle-policy-preview --repository-name ai-catalog-agent
+```
+
+**Resolution:**
+```bash
+# Option A: Rebuild the missing tag from the Git SHA
+git checkout <git-sha>
+docker build -t ai-catalog-agent:restored .
+docker tag ai-catalog-agent:restored <ecr-url>/ai-catalog-agent:<git-sha>
+docker push <ecr-url>/ai-catalog-agent:<git-sha>
+
+# Option B: If you need to increase image retention, update the lifecycle policy
+# Edit ecr.tf and increase max_image_count or untagged_image_expire_days
+cd infrastructure/02-platform-medium/dev
+terraform apply
+
+# Option C: Tag a previously untagged image to prevent deletion
+# Find the image digest first
+aws ecr list-images --repository-name ai-catalog-agent \
+    --query 'imageIds[?imageTag==`null`]' --output json
+# Then tag it
+aws ecr batch-get-image --repository-name ai-catalog-agent \
+    --image-ids imageDigest=<sha256:xxx> --output json \
+    | jq '.images[0].imageManifest' -r > /tmp/manifest.json
+aws ecr put-image --repository-name ai-catalog-agent \
+    --image-tag rescued --image-manifest file:///tmp/manifest.json
+```
+
+**Prevention:**
+- The lifecycle policy has a 14-day grace period before expiring untagged images
+- Tagged images (like `latest`, `v*`) are never expired — only the total image count cap applies
+- Always tag important images with the Git SHA (the CI/CD pipeline does this automatically)
+
+---
+
 ## Operational Metrics
 
 | Metric | Source | Alert Threshold | Alert Name | Action |
@@ -650,6 +815,7 @@ docker build --no-cache -t ai-catalog-agent:test -f Dockerfile .
 2. **Are quality failures spiking?** → Check `quality-drop` alarm → RB-005
 3. **Is the database reachable?** → Check `db-connection-pool` → RB-001
 4. **Are ECS tasks crashing?** → Check `ecs-oom-risk` → RB-007
+5. **Is the CI/CD pipeline failing?** → Check `infra-check` logs → RB-000
 
 ### Escalation Path
 
@@ -700,6 +866,9 @@ fields @timestamp, @message
 | `/dev/platform-medium/db-secret-arn` | 02-platform-medium | `arn:aws:secretsmanager:...` |
 | `/dev/platform-medium/ecs-cluster-name` | 02-platform-medium | `dev-ai-catalog-ecs` |
 | `/dev/platform-medium/emr-application-id` | 02-platform-medium | `app-xxx` |
+| ★ `/dev/platform-medium/ecr-repository-url` | 02-platform-medium | `<account>.dkr.ecr.us-east-1.amazonaws.com/ai-catalog-agent` |
+| ★ `/dev/platform-medium/ecr-repository-arn` | 02-platform-medium | `arn:aws:ecr:us-east-1:<account>:repository/ai-catalog-agent` |
+| ★ `/dev/platform-medium/ecr-repository-name` | 02-platform-medium | `ai-catalog-agent` |
 
 ### C — Required IAM Permissions for ECS Task Role
 
@@ -731,10 +900,55 @@ fields @timestamp, @message
         "logs:PutLogEvents"
     ],
     "Resource": "arn:aws:logs:*:*:log-group:/ecs/ai-catalog-agent/*"
+},
+{
+    "Effect": "Allow",
+    "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+    ],
+    "Resource": "*"
 }
 ```
 
-### D — Poetry → uv Command Migration Reference
+### D — IAM Permissions for GitHub Actions CI/CD Role
+
+These permissions are required on the `github-actions-terraform-role` bootstrap role. Terraform (in `02-platform-medium/dev/iam.tf`) attaches the ECR push and ECS deploy policies automatically, but the base role must exist first.
+
+**Minimum bootstrap role trust policy:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:<org>/<repo>:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Permissions Terraform attaches (auto-provisioned):**
+
+| Policy Name | Actions | Purpose |
+|-------------|---------|---------|
+| `{env}-ecr-push-policy` | `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `ecr:DescribeRepositories`, `ecr:ListImages` | Push Docker images to ECR |
+| `{env}-ecs-deploy-policy` | `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:DescribeServices`, `ecs:UpdateService`, `ecs:DescribeClusters`, `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:WaitUntilServicesStable`, `iam:PassRole` | Deploy to ECS |
+
+### E — Poetry → uv Command Migration Reference
 
 | Action | Old (Poetry) | New (uv) |
 |--------|-------------|----------|

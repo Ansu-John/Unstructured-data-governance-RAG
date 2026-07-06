@@ -293,6 +293,11 @@ resource "aws_ssm_parameter" "my_output" {
 cd infrastructure/02-platform-medium/dev
 terraform fmt
 terraform validate
+
+# 6. IMPORTANT: If your module creates infrastructure consumed by CI/CD
+#    (e.g., ECR repositories, ECS resources), ensure you add the
+#    corresponding infra-check validation in app-python-cicd.yml
+#    See .github/workflows/app-python-cicd.yml for the pattern.
 ```
 
 ### Adding a Database Migration
@@ -336,13 +341,36 @@ git commit -m "feat: add data_classification column to catalog.data_assets"
 Trigger: Push to `main` or PR targeting `main`
 
 Stages:
+0. **Infrastructure Validation Gate** (NEW) — Checks that ECR repository, ECS cluster, and ECS service exist before proceeding. If infra is missing, the pipeline fails immediately with the exact Terraform command to run. Saves ~10 minutes vs. failing at the Docker push step.
 1. **Setup** — `astral-sh/setup-uv@v3` installs uv; `uv sync --frozen` installs dependencies
 2. **Lockfile check** — `uv lock --check` verifies `uv.lock` is in sync
 3. **Lint** — `uv run ruff check src/ tests/`
 4. **Type check** — `uv run mypy src/` (continue-on-error)
 5. **Test** — `uv run pytest --cov=src` (starts Docker Compose for integration tests)
 6. **Docker build** — Multi-stage Docker build with BuildKit cache; push to ECR
-7. **ECS deploy** — Render task definition, rolling update, circuit breaker, wait for stability
+7. **ECR Scan** — Waits for ECR vulnerability scan to complete and reports findings
+8. **ECS deploy** — Render task definition, rolling update, circuit breaker, wait for stability
+
+**Key pipeline changes:**
+- The `docker-build` job now depends on both `infra-check` and `lint-test` — ensuring infrastructure is validated before spending build minutes
+- ECR scan findings are reported after push (non-blocking informational step)
+- The deploy step includes error handling for missing task definitions with actionable next steps
+
+### Infrastructure Validation Gate Details
+
+The `infra-check` job validates three resources:
+
+1. **ECR Repository** (`ai-catalog-agent`) — **Hard requirement**. If missing, the pipeline fails immediately.
+2. **ECS Cluster** (`dev-ai-catalog-ecs`) — **Informational warning**. May not exist on first deploy.
+3. **ECS Service** (`dev-ai-catalog-agent-svc`) — **Informational warning**. Created by Tier 3 Terraform.
+
+To resolve a failed infrastructure check:
+```bash
+# Apply the 02-platform-medium tier (includes ECR repository)
+cd infrastructure/02-platform-medium/dev
+terraform init
+terraform apply
+```
 
 ---
 
@@ -386,6 +414,7 @@ make test
 - [ ] Alembic migration generated (if schema change)
 - [ ] Documentation updated (DevGuide, Runbook, or README as applicable)
 - [ ] Docker build succeeds locally: `docker build -t test .`
+- [ ] **If adding infrastructure dependencies:** Terraform changes are validated (`terraform validate`) and `infra-check` job in `app-python-cicd.yml` is updated
 
 ---
 
@@ -428,15 +457,21 @@ docker run --rm ai-catalog-agent:rc uv run python -c "from src.agents.graph_buil
   git push origin v1.2.0-app
   ```
 - [ ] The CI/CD pipeline (`app-python-cicd.yml`) automatically:
-  1. Lints, type-checks, and tests
-  2. Builds the Docker image
-  3. Pushes to ECR
-  4. Deploys to ECS with a rolling update
+  1. Runs infrastructure validation (ECR, ECS cluster, ECS service check)
+  2. Lints, type-checks, and tests
+  3. Builds the Docker image
+  4. Pushes to ECR
+  5. Awaits ECR vulnerability scan completion
+  6. Deploys to ECS with a rolling update
 
 - [ ] If infrastructure changes are also part of this release:
   ```bash
+  # IMPORTANT: Infrastructure must be applied BEFORE app code pushes
   git tag -a v1.2.0-platform -m "Infra v1.2.0"
   git push origin v1.2.0-platform
+  # Wait for infra-02-platform.yml to complete, then push app
+  git tag -a v1.2.0-app -m "Release v1.2.0"
+  git push origin v1.2.0-app
   ```
 
 ### 4. Post-Release
@@ -444,6 +479,10 @@ docker run --rm ai-catalog-agent:rc uv run python -c "from src.agents.graph_buil
 - [ ] Verify ECS service is stable (CloudWatch dashboard)
 - [ ] Verify Alembic migrations ran (check `catalog.alembic_version`)
 - [ ] Run a manual agent execution to confirm end-to-end
+- [ ] Verify the Docker image was pushed to ECR:
+  ```bash
+  aws ecr list-images --repository-name ai-catalog-agent
+  ```
 - [ ] Merge `main` back to `develop`:
   ```bash
   git checkout develop

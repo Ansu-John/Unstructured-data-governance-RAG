@@ -2,6 +2,16 @@
 # outputs.tf — 02-platform-medium (Dev)
 # ============================================================================
 
+output "ecr_repository_url" {
+  description = "ECR repository URL for the application Docker image"
+  value       = module.ecr_repository.repository_url
+}
+
+output "ecr_repository_arn" {
+  description = "ECR repository ARN"
+  value       = module.ecr_repository.repository_arn
+}
+
 output "ecs_cluster_name" {
   description = "ECS cluster name"
   value       = module.compute_base.ecs_cluster_name

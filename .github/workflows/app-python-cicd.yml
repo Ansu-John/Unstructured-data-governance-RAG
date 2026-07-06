@@ -1,9 +1,10 @@
 # ============================================================================
-# app-python-cicd.yml — Application CI/CD (Docker → ECR → ECS)
+# app-python-cicd.yml — Application CI/CD (Infra Check → Docker → ECR → ECS)
 #
 # Trigger: Push to main or develop branches, or PR targeting them.
 #
 # Pipeline stages:
+#   0. Infra Check   (NEW) — Validates all AWS resources exist before building
 #   1. Lint & Type-check (ruff, mypy)
 #   2. Test (pytest with coverage)
 #   3. Build Docker image
@@ -11,6 +12,9 @@
 #   5. Deploy to ECS (rolling update with circuit breaker)
 #
 # DEPENDENCY MANAGEMENT: uv (Astral) — https://docs.astral.sh/uv/
+# INFRASTRUCTURE PREREQUISITE: ECR repository must be created by Terraform
+#   (02-platform-medium tier) BEFORE this pipeline runs on main branch.
+#   See: infrastructure/02-platform-medium/dev/ecr.tf
 # ============================================================================
 
 name: "App: Python CI/CD"
@@ -45,6 +49,73 @@ env:
   SERVICE_NAME: ai-catalog-agent
 
 jobs:
+  # --------------------------------------------------------------------------
+  # JOB 0: Infrastructure Validation Gate
+  # --------------------------------------------------------------------------
+  infra-check:
+    name: "Infrastructure Validation Gate"
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terraform-role"
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check ECR Repository Exists
+        id: check-ecr
+        run: |
+          echo "Checking ECR repository: ${{ env.ECR_REPOSITORY }}"
+          if aws ecr describe-repositories --repository-names "${{ env.ECR_REPOSITORY }}" --region "${{ env.AWS_REGION }}" > /dev/null 2>&1; then
+            echo "status=found" >> "$GITHUB_OUTPUT"
+            echo "✅ ECR repository '${{ env.ECR_REPOSITORY }}' exists."
+          else
+            echo "status=not-found" >> "$GITHUB_OUTPUT"
+            echo "❌ ECR repository '${{ env.ECR_REPOSITORY }}' does NOT exist!"
+            echo ""
+            echo "Run Terraform 02-platform-medium first:"
+            echo "  cd infrastructure/02-platform-medium/dev"
+            echo "  terraform init && terraform apply"
+            echo ""
+            exit 1
+          fi
+
+      - name: Check ECS Cluster Exists
+        id: check-ecs-cluster
+        run: |
+          CLUSTER_NAME="dev-ai-catalog-ecs"
+          echo "Checking ECS cluster: ${CLUSTER_NAME}"
+          if aws ecs describe-clusters --clusters "${CLUSTER_NAME}" --region "${{ env.AWS_REGION }}" \
+            --query 'clusters[0].status' --output text | grep -q "ACTIVE"; then
+            echo "✅ ECS cluster '${CLUSTER_NAME}' is ACTIVE."
+          else
+            echo "⚠️  ECS cluster '${CLUSTER_NAME}' not found or not active."
+            echo "This may be expected if deploying for the first time."
+            echo "Continuing — deploy step will surface any errors."
+          fi
+
+      - name: Check ECS Service Exists
+        id: check-ecs-service
+        run: |
+          SERVICE_NAME="dev-ai-catalog-agent-svc"
+          CLUSTER_NAME="dev-ai-catalog-ecs"
+          echo "Checking ECS service: ${SERVICE_NAME}"
+          if aws ecs describe-services --cluster "${CLUSTER_NAME}" --services "${SERVICE_NAME}" \
+            --region "${{ env.AWS_REGION }}" --query 'services[0].status' --output text | grep -q "ACTIVE"; then
+            echo "✅ ECS service '${SERVICE_NAME}' is ACTIVE."
+          else
+            echo "⚠️  ECS service '${SERVICE_NAME}' not found."
+            echo "This is expected if Tier 3 (03-application-dynamic) has not been applied yet."
+          fi
+
+    outputs:
+      ecr-status: ${{ steps.check-ecr.outputs.status }}
+
   lint-test:
     name: "Lint, Type-Check & Test"
     runs-on: ubuntu-latest
@@ -73,21 +144,19 @@ jobs:
           cd local_development
           docker compose up -d
           echo "Waiting for Postgres (Max 60 seconds)..."
-          # The timeout command forces the loop to break after 60s.
-          # The || operator triggers the log dump if the timeout is reached.
           timeout 60 bash -c 'until docker compose exec -T postgres pg_isready -d postgres > /dev/null 2>&1; do sleep 2; done' || {
             echo "Postgres failed to start in time. Dumping logs:"
             docker compose logs postgres
             exit 1
           }
-          
+
           echo "Waiting for LocalStack (Max 120 seconds)..."
           timeout 120 bash -c 'until curl -sf http://localhost:4566/_localstack/health | grep -q s3; do sleep 2; done' || {
             echo "LocalStack failed to start in time. Dumping logs:"
             docker compose logs localstack
             exit 1
           }
-          
+
           echo "Local stack is ready."
 
       - name: Install Dependencies
@@ -130,7 +199,7 @@ jobs:
 
   docker-build:
     name: "Build & Push Docker Image"
-    needs: [lint-test]
+    needs: [infra-check, lint-test]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
@@ -151,6 +220,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Generate Date Tag
+        id: date
+        run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
       - name: Build, Tag, and Push Image
         id: build-image
         env:
@@ -169,8 +242,39 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Wait for ECR Scan Completion
+        id: wait-scan
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Waiting for ECR image scan to complete..."
+          for i in $(seq 1 30); do
+            SCAN_STATUS=$(aws ecr describe-image-scan-findings \
+              --repository-name "${{ env.ECR_REPOSITORY }}" \
+              --image-id imageTag="${IMAGE_TAG}" \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'imageScanStatus.status' --output text 2>/dev/null || echo "PENDING")
+            if [ "$SCAN_STATUS" = "COMPLETE" ]; then
+              echo "✅ ECR scan completed."
+              FINDINGS=$(aws ecr describe-image-scan-findings \
+                --repository-name "${{ env.ECR_REPOSITORY }}" \
+                --image-id imageTag="${IMAGE_TAG}" \
+                --region "${{ env.AWS_REGION }}" \
+                --query 'imageScanFindings.findingSeverityCounts' --output json)
+              echo "Scan findings: $FINDINGS"
+              echo "scan-status=complete" >> "$GITHUB_OUTPUT"
+              break
+            elif [ "$SCAN_STATUS" = "FAILED" ]; then
+              echo "⚠️  ECR scan failed (likely an unsupported base image). Continuing."
+              echo "scan-status=failed" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 5
+          done
+
       - name: Output Image URI
-        run: echo "image=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+        run: echo "image=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}" >> "$GITHUB_OUTPUT"
 
     outputs:
       image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
@@ -195,10 +299,20 @@ jobs:
       - name: Download Task Definition
         id: task-def
         run: |
-          aws ecs describe-task-definition \
+          echo "Fetching task definition: dev-ai-catalog-agent"
+          if aws ecs describe-task-definition \
             --task-definition dev-ai-catalog-agent \
             --query taskDefinition \
-            --output json > task-def.json
+            --output json > task-def.json 2>/dev/null; then
+            echo "✅ Task definition downloaded successfully."
+          else
+            echo "⚠️  Task definition 'dev-ai-catalog-agent' not found."
+            echo "This means 03-application-dynamic Terraform has not been applied."
+            echo "Apply it first:"
+            echo "  cd infrastructure/03-application-dynamic/dev"
+            echo "  terraform init && terraform apply"
+            exit 1
+          fi
 
       - name: Fill Image URI
         id: render-task-def
@@ -222,4 +336,4 @@ jobs:
           aws ecs wait services-stable \
             --cluster dev-ai-catalog-ecs \
             --services dev-ai-catalog-agent-svc
-          echo "Deployment confirmed stable"
+          echo "✅ Deployment confirmed stable"
