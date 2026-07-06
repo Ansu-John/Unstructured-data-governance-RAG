@@ -16,7 +16,73 @@ Before the first deployment, an SRE must provision:
 2. **DynamoDB Lock Table:** `ai-catalog-terraform-locks` (created outside Terraform)
 3. **GitHub OIDC Provider:** IAM role for GitHub Actions with trust to the repo (`github-actions-terraform-role`)
 
-> **CRITICAL:** The `github-actions-terraform-role` must be created with the minimum permissions documented in **Appendix D** below. Without these, Terraform cannot read SSM parameters from Tier 1, read/write its own state, or create/manage IAM policies. After the first `terraform apply` completes, Terraform will manage these policies going forward — but the role must have them at Day 0.
+> **⚠️ CRITICAL — Day 0 Bootstrap Policy Required:**
+> The `github-actions-terraform-role` must be given the minimum bootstrap permissions **before** the first `terraform apply`. If you see `AccessDeniedException: ssm:GetParameter` errors, run the one-shot bootstrap script below. After the first `terraform apply`, Terraform (`iam.tf`) manages all policies automatically.
+
+#### One-Shot Bootstrap Script
+
+Run this **once** from an AWS admin account (AWS CloudShell, local CLI, or pipeline admin role) to grant the `github-actions-terraform-role` the minimum permissions needed for Terraform to run:
+
+```bash
+# ═══════════════════════════════════════════════════════════════
+# ONE-SHOT BOOTSTRAP — Run this BEFORE the first terraform apply
+# ═══════════════════════════════════════════════════════════════
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ROLE_NAME="github-actions-terraform-role"
+
+echo "Attaching bootstrap policy to ${ROLE_NAME} in account ${ACCOUNT_ID}..."
+
+# Step 1: Create the bootstrap policy
+aws iam create-policy \
+  --policy-name "bootstrap-terraform-minimal" \
+  --description "Minimum bootstrap permissions for Terraform CI/CD (remove after first apply)" \
+  --policy-document "{
+  \"Version\": \"2012-10-17\",
+  \"Statement\": [
+    {
+      \"Sid\": \"TerraformStateBackend\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\", \"s3:ListBucket\"],
+      \"Resource\": [\"arn:aws:s3:::ai-catalog-terraform-state-*\", \"arn:aws:s3:::ai-catalog-terraform-state-*/*\"]
+    },
+    {
+      \"Sid\": \"TerraformStateLocking\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"dynamodb:GetItem\", \"dynamodb:PutItem\", \"dynamodb:DeleteItem\", \"dynamodb:DescribeTable\"],
+      \"Resource\": \"arn:aws:dynamodb:*:*:table/ai-catalog-terraform-locks\"
+    },
+    {
+      \"Sid\": \"SSMParameterAccess\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"ssm:GetParameter\", \"ssm:GetParameters\", \"ssm:GetParametersByPath\", \"ssm:PutParameter\", \"ssm:DeleteParameter\", \"ssm:AddTagsToResource\"],
+      \"Resource\": \"arn:aws:ssm:*:*:parameter/dev/*\"
+    },
+    {
+      \"Sid\": \"IAMSelfManagement\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"iam:CreatePolicy\", \"iam:CreatePolicyVersion\", \"iam:DeletePolicy\", \"iam:DeletePolicyVersion\", \"iam:GetPolicy\", \"iam:GetPolicyVersion\", \"iam:ListPolicyVersions\", \"iam:AttachRolePolicy\", \"iam:DetachRolePolicy\", \"iam:ListAttachedRolePolicies\", \"iam:GetRole\"],
+      \"Resource\": [\"arn:aws:iam::*:policy/dev-*\", \"arn:aws:iam::*:role/github-actions-terraform-role\"]
+    },
+    {
+      \"Sid\": \"ReadAWSResources\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"ec2:DescribeVpcs\", \"ec2:DescribeSubnets\", \"ec2:DescribeSecurityGroups\", \"ecs:DescribeClusters\", \"ecs:DescribeServices\", \"ecs:ListServices\", \"rds:DescribeDBInstances\", \"rds:DescribeDBClusters\", \"rds:DescribeDBSubnetGroups\"],
+      \"Resource\": \"*\"
+    }
+  ]
+}"
+
+# Step 2: Attach to the role
+aws iam attach-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/bootstrap-terraform-minimal"
+
+echo "✅ Bootstrap policy attached. You can now run: terraform apply"
+echo ""
+echo "After the first 'terraform apply' succeeds, clean up with:"
+echo "  aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/bootstrap-terraform-minimal"
+echo "  aws iam delete-policy --policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/bootstrap-terraform-minimal"
+```
 
 ### Bootstrap Validation
 
@@ -856,6 +922,8 @@ fields @timestamp, @message
 
 ### B — SSM Parameter Names (Dev Environment)
 
+> **Note:** Tier 2 (`02-platform-medium/data.tf`) only reads `vpc-id`, `private-subnet-ids`, and `kms-key-arn` from Tier 1. The other Tier 1 parameters listed below are published by Tier 1 for reference but are not consumed by Tier 2's data sources. This reduces the SSM permission surface area.
+
 | Path | Source Tier | Example |
 |------|-------------|---------|
 | `/dev/core-static/vpc-id` | 01-core-static | `vpc-xxx` |
@@ -868,9 +936,9 @@ fields @timestamp, @message
 | `/dev/platform-medium/db-secret-arn` | 02-platform-medium | `arn:aws:secretsmanager:...` |
 | `/dev/platform-medium/ecs-cluster-name` | 02-platform-medium | `dev-ai-catalog-ecs` |
 | `/dev/platform-medium/emr-application-id` | 02-platform-medium | `app-xxx` |
-| ★ `/dev/platform-medium/ecr-repository-url` | 02-platform-medium | `<account>.dkr.ecr.us-east-1.amazonaws.com/ai-catalog-agent` |
-| ★ `/dev/platform-medium/ecr-repository-arn` | 02-platform-medium | `arn:aws:ecr:us-east-1:<account>:repository/ai-catalog-agent` |
-| ★ `/dev/platform-medium/ecr-repository-name` | 02-platform-medium | `ai-catalog-agent` |
+| `/dev/platform-medium/ecr-repository-url` | 02-platform-medium | `<account>.dkr.ecr.us-east-1.amazonaws.com/ai-catalog-agent` |
+| `/dev/platform-medium/ecr-repository-arn` | 02-platform-medium | `arn:aws:ecr:us-east-1:<account>:repository/ai-catalog-agent` |
+| `/dev/platform-medium/ecr-repository-name` | 02-platform-medium | `ai-catalog-agent` |
 
 ### C — Required IAM Permissions for ECS Task Role
 

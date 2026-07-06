@@ -9,9 +9,3 @@ variable "ecr_repository_name" {
   type        = string
   default     = "ai-catalog-agent"
 }
-
-variable "environment" {
-  description = "Deployment environment override (auto-detected from locals)"
-  type        = string
-  default     = ""
-}

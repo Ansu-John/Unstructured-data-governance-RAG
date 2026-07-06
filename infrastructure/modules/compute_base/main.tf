@@ -110,8 +110,8 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "s3:GetObject",
           "s3:PutObject",
           "s3:ListBucket",
@@ -123,8 +123,8 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "kms:Decrypt",
           "kms:GenerateDataKey",
           "kms:Encrypt",
@@ -132,8 +132,8 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
         Resource = ["*"]
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream",
         ]
@@ -143,8 +143,8 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogStream",
           "logs:PutLogEvents",
         ]
@@ -153,9 +153,9 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
         ]
       },
       {
-        Sid      = "ECRPullForTaskExecution"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "ECRPullForTaskExecution"
+        Effect = "Allow"
+        Action = [
           "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
@@ -172,10 +172,10 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
 # ---------------------------------------------------------------------------
 
 resource "aws_emrserverless_application" "spark" {
-  count  = var.enable_emr_serverless ? 1 : 0
-  name   = var.emr_application_name != "" ? var.emr_application_name : "${var.environment}-ai-catalog-emr"
+  count         = var.enable_emr_serverless ? 1 : 0
+  name          = var.emr_application_name != "" ? var.emr_application_name : "${var.environment}-ai-catalog-emr"
   release_label = "emr-7.2.0"
-  type   = "SPARK"
+  type          = "SPARK"
 
   initial_capacity {
     initial_capacity_type = "Driver"

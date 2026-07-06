@@ -24,11 +24,11 @@ module "ecr_repository" {
 
   # IMMUTABLE in non-dev environments; MUTABLE is acceptable in dev for
   # rapid iteration but should never be used in staging or production.
-  image_tag_mutability  = local.environment == "dev" ? "MUTABLE" : "IMMUTABLE"
-  scan_on_push          = true
+  image_tag_mutability = local.environment == "dev" ? "MUTABLE" : "IMMUTABLE"
+  scan_on_push         = true
 
   # If a KMS key was published by 01-core-static, use it; otherwise AES-256
-  kms_key_arn           = local.kms_key_arn
+  kms_key_arn = local.kms_key_arn
 
   # Lifecycle: expire untagged images after 14 days, cap total at 1000
   untagged_image_expire_days = 14

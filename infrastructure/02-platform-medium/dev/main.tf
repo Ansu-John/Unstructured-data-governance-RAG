@@ -46,7 +46,7 @@ locals {
 module "compute_base" {
   source = "../../modules/compute_base"
 
-  environment = local.environment
+  environment           = local.environment
   enable_emr_serverless = true
 
   tags = local.tags
@@ -59,16 +59,16 @@ module "compute_base" {
 module "database_aurora" {
   source = "../../modules/database_aurora"
 
-  environment    = local.environment
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnet_ids
+  environment                = local.environment
+  vpc_id                     = local.vpc_id
+  subnet_ids                 = local.private_subnet_ids
   allowed_security_group_ids = []
 
   database_name           = "postgres"
   master_username         = "postgres"
   serverless_min_capacity = 0.5
   serverless_max_capacity = 4.0
-  deletion_protection     = false  # Disabled in dev for easier cleanup
+  deletion_protection     = false # Disabled in dev for easier cleanup
 
   tags = local.tags
 }
@@ -80,7 +80,7 @@ module "database_aurora" {
 module "observability" {
   source = "../../modules/observability"
 
-  environment = local.environment
+  environment        = local.environment
   log_retention_days = 7
 
   tags = local.tags

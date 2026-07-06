@@ -47,11 +47,11 @@ variable "tags" {
 
 locals {
   log_groups = {
-    ecs_agent      = "/ecs/ai-catalog-agent/${var.environment}"
-    emr_pipeline   = "/emr/ai-catalog-pipeline/${var.environment}"
-    agent_graph    = "/langgraph/ai-catalog-agent/${var.environment}"
-    quality_runs   = "/quality/gx-runs/${var.environment}"
-    db_audit       = "/rds/ai-catalog-db/${var.environment}"
+    ecs_agent    = "/ecs/ai-catalog-agent/${var.environment}"
+    emr_pipeline = "/emr/ai-catalog-pipeline/${var.environment}"
+    agent_graph  = "/langgraph/ai-catalog-agent/${var.environment}"
+    quality_runs = "/quality/gx-runs/${var.environment}"
+    db_audit     = "/rds/ai-catalog-db/${var.environment}"
   }
 }
 
@@ -235,9 +235,9 @@ resource "aws_cloudwatch_dashboard" "main" {
       {
         type = "log"
         properties = {
-          query   = "SOURCE '${aws_cloudwatch_log_group.main["agent_graph"].name}' | fields @timestamp, @message | filter @message like /ERROR|FAIL|quarantine/ | sort @timestamp desc | limit 20"
-          region  = "us-east-1"
-          title   = "${var.environment} — Recent Agent Errors"
+          query  = "SOURCE '${aws_cloudwatch_log_group.main["agent_graph"].name}' | fields @timestamp, @message | filter @message like /ERROR|FAIL|quarantine/ | sort @timestamp desc | limit 20"
+          region = "us-east-1"
+          title  = "${var.environment} — Recent Agent Errors"
         }
       },
     ]
