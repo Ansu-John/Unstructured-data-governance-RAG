@@ -174,6 +174,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake" {
     id     = "glacier-transition"
     status = "Enabled"
 
+    # Apply to all objects in the bucket (empty filter = no prefix restriction)
+    filter {}
+
     noncurrent_version_transition {
       noncurrent_days = var.expiration_days_glacier
       storage_class   = "GLACIER"

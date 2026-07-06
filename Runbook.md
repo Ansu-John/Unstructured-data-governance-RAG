@@ -68,6 +68,12 @@ aws iam create-policy \
       \"Effect\": \"Allow\",
       \"Action\": [\"ec2:DescribeVpcs\", \"ec2:DescribeSubnets\", \"ec2:DescribeSecurityGroups\", \"ecs:DescribeClusters\", \"ecs:DescribeServices\", \"ecs:ListServices\", \"rds:DescribeDBInstances\", \"rds:DescribeDBClusters\", \"rds:DescribeDBSubnetGroups\"],
       \"Resource\": \"*\"
+    },
+    {
+      \"Sid\": \"KMSManagement\",
+      \"Effect\": \"Allow\",
+      \"Action\": [\"kms:CreateKey\", \"kms:CreateAlias\", \"kms:ScheduleKeyDeletion\", \"kms:TagResource\", \"kms:UntagResource\", \"kms:ListAliases\", \"kms:DescribeKey\"],
+      \"Resource\": \"*\"
     }
   ]
 }"
@@ -1077,6 +1083,22 @@ These permissions are required on the `github-actions-terraform-role` bootstrap 
         "arn:aws:iam::*:policy/dev-*",
         "arn:aws:iam::*:role/github-actions-terraform-role"
       ]
+    },
+    {
+      "Sid": "KMSManagement",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey",
+        "kms:CreateAlias",
+        "kms:ScheduleKeyDeletion",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:DescribeKey",
+        "kms:ListAliases",
+        "kms:GetKeyRotationStatus",
+        "kms:EnableKeyRotation"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "ECRReadOnly",
