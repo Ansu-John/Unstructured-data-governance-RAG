@@ -208,7 +208,8 @@ def _spark_profile(spark: SparkSession, path: str, file_id: str) -> ProfileResul
             )
 
     # Inferred types
-    inferred_types = {f["name"]: f["type"] for f in schema_fields}
+    # inferred_types = {f["name"]: f["type"] for f in schema_fields} < For MyPy Argument "inferred_types" to "ProfileResult" has incompatible type "dict[object, object]"; expected "dict[str, str]"  [arg-type] 
+    inferred_types: dict[str, str] = {str(f["name"]): str(f["type"]) for f in schema_fields}
 
     # Sample data (first 5 rows)
     sample_rows = df.limit(5).toPandas().to_dict(orient="records") if row_count > 0 else [] # type: ignore[attr-defined]

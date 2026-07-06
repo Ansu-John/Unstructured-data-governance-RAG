@@ -115,7 +115,6 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
 
 
 
-# FIX: Use the string "__end__" for the Mypy Literal hint
 def retry_router(state: AgentState) -> str:
     """
     After logging a failure, decide whether to retry or terminate.
@@ -130,7 +129,8 @@ def retry_router(state: AgentState) -> str:
         return "ingestion"
     else:
         logger.error("Max retries (%d) exhausted — terminating graph", MAX_RETRIES_PER_FILE)
-        return END # This will now correctly halt the graph
+        # Forcefully halt the graph using the reserved end string
+        return "__end__"
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ def run_graph(
     initial_state = new_run_state(thread_id=thread_id)
 
     final_state: dict[str, Any] = {}
-    for event in graph.stream(initial_state, config=config ):
+    for event in graph.stream(initial_state, config=config ): # type: ignore[arg-type]
         logger.debug("Graph event: %s", event)
         # The last event contains the final state
         for _, node_state in event.items():
