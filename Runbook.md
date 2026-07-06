@@ -22,7 +22,7 @@ Before the first deployment, an SRE must provision:
 # Verify all prerequisites before deploying
 aws s3api head-bucket --bucket "ai-catalog-terraform-state-$(aws sts get-caller-identity --query Account --output text)"
 aws dynamodb describe-table --table-name ai-catalog-terraform-locks --query 'Table.TableStatus'
-aws iam get-role --role-name github-actions-terraform --query 'Role.Arn'
+aws iam get-role --role-name github-actions-terraform-role --query 'Role.Arn'
 ```
 
 ### Deployment Sequence (MANDATORY ORDER)
