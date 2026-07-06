@@ -114,7 +114,9 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
         return "log_fail_and_quarantine"
 
 
-def retry_router(state: AgentState) -> Literal["ingestion", END]:
+
+# FIX: Use the string "__end__" for the Mypy Literal hint
+def retry_router(state: AgentState) -> Literal["ingestion", "__end__"]:
     """
     After logging a failure, decide whether to retry or terminate.
 

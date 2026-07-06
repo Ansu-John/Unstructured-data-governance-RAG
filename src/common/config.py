@@ -38,13 +38,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
 
     # ── Database (PostgreSQL + pgvector) ────────────────────────────────
-    db_host: str = Field(default="localhost", env="DB_HOST")
-    db_port: int = Field(default=5433, env="DB_PORT")
-    db_name: str = Field(default="postgres", env="DB_NAME")
-    db_user: str = Field(default="postgres", env="DB_USER")
-    db_password: str = Field(default="", env="DB_PASSWORD")
-    db_min_connections: int = Field(default=2, env="DB_MIN_CONNECTIONS")
-    db_max_connections: int = Field(default=10, env="DB_MAX_CONNECTIONS")
+    db_host: str = Field(default="localhost")
+    db_port: int = Field(default=5433)
+    db_name: str = Field(default="postgres")
+    db_user: str = Field(default="postgres")
+    db_password: str = Field(default="")
+    db_min_connections: int = Field(default=2)
+    db_max_connections: int = Field(default=10)
 
     @property
     def database_url(self) -> str:

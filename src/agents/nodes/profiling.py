@@ -37,7 +37,7 @@ try:
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
-    tracer = None
+    tracer = None # type: ignore[assignment]
     HAS_OTEL = False
 
 from src.agents.state import (
@@ -79,18 +79,22 @@ def profiling_node(state: AgentState) -> dict[str, Any]:
                 # Skip if already profiled (idempotent)
                 if file_id in profiles:
                     continue
-                # Default to success if quality checks haven't run yet
-                qr_dict = quality_results.get(file_id, {"success": True, "score": 1.0})
-                if qr_dict is None:
+                # FIX 1: Strictly check if the file exists in quality_results
+                if file_id not in quality_results:
                     logger.info("Skipping file %s — no quality result yet", f["file_name"])
                     continue
+
+                qr_dict = quality_results[file_id]
+                # FIX 2: Check for success
                 if not qr_dict.get("success", False):
                     logger.info("Skipping file %s — failed quality check", f["file_name"])
                     continue
 
                 try:
+                    # FIX 3: Add type ignores for dynamic Spark/Pandas returns to satisfy Mypy
+
                     profile = _compute_profile(spark, f, qr_dict)
-                    profiles[file_id] = profile_result_to_dict(profile)
+                    profiles[file_id] = profile_result_to_dict(profile) # type: ignore[arg-type]
                     logger.info(
                         "Profiled %s: %d rows, %d columns, null_rate=%.2f",
                         f["file_name"],

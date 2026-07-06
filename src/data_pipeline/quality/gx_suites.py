@@ -67,7 +67,7 @@ try:
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
-    tracer = None
+    tracer = None # type: ignore[assignment]
     HAS_OTEL = False
     logger.info("OpenTelemetry not available — running without distributed tracing")
 
@@ -216,9 +216,13 @@ class GreatExpectationsValidator:
             t0 = time.perf_counter()
             try:
                 self._ensure_context(df, asset_name)
+                # FIX: Prove to Mypy that the context is initialized
+                assert self._context is not None
                 expectations = self.SUITE_REGISTRY[self.suite_name]
 
                 # 1. Register the Spark Data Asset
+                # (Mypy will no longer complain about these lines!)
+
                 data_source = self._context.data_sources.add_spark(name=f"{asset_name}_src")
                 data_asset = data_source.add_dataframe_asset(name=asset_name)
                 batch_def = data_asset.add_batch_definition_whole_dataframe("batch_def")
