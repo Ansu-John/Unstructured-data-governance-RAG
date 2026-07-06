@@ -67,7 +67,6 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
 ]
-
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.0,<2.0.0" },
