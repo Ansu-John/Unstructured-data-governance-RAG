@@ -152,14 +152,13 @@ def log_fail_and_quarantine(state: AgentState) -> dict[str, Any]:
     quality_results: dict[str, Any] = state.get("quality_results", {})
     errors: list[str] = list(state.get("errors", []))
     retry_count = state.get("retry_count", 0)
+    files: list[dict] = list(state.get("files", []))  # Create a copy to modify
 
     qr = quality_results.get(current_file_id, {})
     score = qr.get("score", 0.0)
     threshold = qr.get("threshold", QUALITY_THRESHOLD)
     file_name = "unknown"
-
-    # Find the file name from state
-    for f in state.get("files", []):
+    for f in files:
         if f.get("file_id") == current_file_id:
             file_name = f.get("file_name", "unknown")
             break
@@ -172,10 +171,19 @@ def log_fail_and_quarantine(state: AgentState) -> dict[str, Any]:
     logger.warning(msg)
     errors.append(msg)
 
-    return {
+    result: dict[str, Any] = {
         "retry_count": retry_count + 1,
         "errors": errors,
     }
+
+    # FIX: If max retries are hit, mark the file as FAILED in the state
+    if retry_count + 1 >= MAX_RETRIES_PER_FILE:
+        for f in files:
+            if f.get("file_id") == current_file_id:
+                f["status"] = "FAILED"
+        result["files"] = files
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -186,16 +194,15 @@ def log_fail_and_quarantine(state: AgentState) -> dict[str, Any]:
 def advance_file_node(state: AgentState) -> dict[str, Any]:
     """
     Node: Advance current_file_id to the next unprocessed file.
-    After all files are processed, sets current_file_id to empty string
-    and the graph terminates.
+    After all files are processed (or failed), sets current_file_id to empty string.
     """
     files: list[dict] = state.get("files", [])
     catalog_entries: list[dict] = state.get("catalog_entries", [])
     cataloged_ids = {e["file_id"] for e in catalog_entries}
 
-    # Find the next file that hasn't been cataloged
+    # FIX: Find the next file that hasn't been cataloged AND hasn't permanently failed
     for f in files:
-        if f["file_id"] not in cataloged_ids:
+        if f["file_id"] not in cataloged_ids and f.get("status") != "FAILED":
             logger.info("Advancing to next file: %s (%s)", f["file_name"], f["file_id"])
             return {
                 "current_file_id": f["file_id"],
@@ -292,6 +299,7 @@ def compile_graph_with_checkpointer() -> CompiledGraph:
     try:
         import psycopg
         from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg.rows import dict_row  # <-- 1. ADD THIS IMPORT
 
         conn = psycopg.connect(
             host=os.environ.get("DB_HOST", "localhost"),
@@ -299,6 +307,7 @@ def compile_graph_with_checkpointer() -> CompiledGraph:
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
             autocommit=True, # <-- ADD THIS to fix the index error
+            row_factory=dict_row,  # <-- 2. ADD THIS ARGUMENT
         ) # type: ignore[arg-type]
         checkpointer = PostgresSaver(conn)
         checkpointer.setup()  # Ensure tables exist
