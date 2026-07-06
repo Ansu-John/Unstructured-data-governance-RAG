@@ -37,6 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv (Astral) — pinned to a known-good minor version
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
+WORKDIR /app
+
 # Copy dependency manifests first (maximize Docker layer caching)
 COPY pyproject.toml uv.lock ./
 
@@ -94,7 +96,7 @@ RUN chown -R catalog:catalog /app
 USER catalog
 
 # Default entry point
-ENTRYPOINT ["uv", "run", "python", "-m", "src.agents.graph_builder"]
+ENTRYPOINT ["python", "-m", "src.agents.graph_builder"]
 
 # Override for one-off tasks:
 #   docker run --rm <image> uv run python -m src.data_pipeline.quality.gx_suites
