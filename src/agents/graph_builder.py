@@ -116,7 +116,7 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
 
 
 # FIX: Use the string "__end__" for the Mypy Literal hint
-def retry_router(state: AgentState) -> Literal["ingestion", "__end__"]:
+def retry_router(state: AgentState) -> str:
     """
     After logging a failure, decide whether to retry or terminate.
 
@@ -130,7 +130,7 @@ def retry_router(state: AgentState) -> Literal["ingestion", "__end__"]:
         return "ingestion"
     else:
         logger.error("Max retries (%d) exhausted — terminating graph", MAX_RETRIES_PER_FILE)
-        return END
+        return END # This will now correctly halt the graph
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ def compile_graph_with_checkpointer() -> CompiledGraph:
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
             autocommit=True, # <-- ADD THIS to fix the index error
-        )
+        ) # type: ignore[arg-type]
         checkpointer = PostgresSaver(conn)
         checkpointer.setup()  # Ensure tables exist
         logger.info("Graph compiled with PostgresSaver checkpointer")
@@ -345,7 +345,7 @@ def run_graph(
     initial_state = new_run_state(thread_id=thread_id)
 
     final_state: dict[str, Any] = {}
-    for event in graph.stream(initial_state, config=config):
+    for event in graph.stream(initial_state, config=config ):
         logger.debug("Graph event: %s", event)
         # The last event contains the final state
         for _, node_state in event.items():

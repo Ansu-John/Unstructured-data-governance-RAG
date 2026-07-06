@@ -211,7 +211,7 @@ def _spark_profile(spark: SparkSession, path: str, file_id: str) -> ProfileResul
     inferred_types = {f["name"]: f["type"] for f in schema_fields}
 
     # Sample data (first 5 rows)
-    sample_rows = df.limit(5).toPandas().to_dict(orient="records") if row_count > 0 else []
+    sample_rows = df.limit(5).toPandas().to_dict(orient="records") if row_count > 0 else [] # type: ignore[attr-defined]
 
     return ProfileResult(
         file_id=file_id,

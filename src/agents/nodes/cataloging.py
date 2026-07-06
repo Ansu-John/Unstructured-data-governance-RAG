@@ -38,7 +38,7 @@ try:
     tracer = trace.get_tracer(__name__)
     HAS_OTEL = True
 except ImportError:
-    tracer = None
+    tracer = None # type: ignore[assignment]
     HAS_OTEL = False
 
 from src.agents.state import (
@@ -77,7 +77,7 @@ try:
         EndpointConnectionError,
         ReadTimeoutError,
         BotoCoreError,
-    )
+    ) # type: ignore[assignment]
 except ImportError:
     pass
 

@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # ── General ─────────────────────────────────────────────────────────
     environment: DeploymentEnvironment = DeploymentEnvironment.LOCAL
     service_name: str = "ai-data-catalog-agent"
-    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    log_level: str = Field(default="INFO")
 
     # ── Database (PostgreSQL + pgvector) ────────────────────────────────
     db_host: str = Field(default="localhost")
@@ -61,11 +61,11 @@ class Settings(BaseSettings):
         )
 
     # ── S3 / Medallion paths ────────────────────────────────────────────
-    bronze_bucket: str = Field(default="ai-catalog-bronze-dev", env="BRONZE_BUCKET")
-    silver_bucket: str = Field(default="ai-catalog-silver-dev", env="SILVER_BUCKET")
-    gold_bucket: str = Field(default="ai-catalog-gold-dev", env="GOLD_BUCKET")
-    quarantine_prefix: str = Field(default="_quarantine", env="QUARANTINE_PREFIX")
-    bronze_s3_paths: str = Field(default="", env="BRONZE_S3_PATHS")
+    bronze_bucket: str = Field(default="ai-catalog-bronze-dev")
+    silver_bucket: str = Field(default="ai-catalog-silver-dev")
+    gold_bucket: str = Field(default="ai-catalog-gold-dev")
+    quarantine_prefix: str = Field(default="_quarantine")
+    bronze_s3_paths: str = Field(default="")
 
     @property
     def bronze_paths_list(self) -> list[str]:
@@ -74,8 +74,8 @@ class Settings(BaseSettings):
         return [f"s3://{self.bronze_bucket}/"]
 
     # ── AWS ─────────────────────────────────────────────────────────────
-    aws_region: str = Field(default="us-east-1", env="AWS_REGION")
-    aws_endpoint_url: str | None = Field(default=None, env="AWS_ENDPOINT_URL")
+    aws_region: str = Field(default="us-east-1")
+    aws_endpoint_url: str | None = Field(default=None)
     bedrock_model_id: str = Field(
         default="anthropic.claude-3-5-haiku-20241022-v1:0",
         env="BEDROCK_MODEL_ID",
@@ -86,23 +86,23 @@ class Settings(BaseSettings):
     )
 
     # ── Agent graph ─────────────────────────────────────────────────────
-    agent_max_retries: int = Field(default=3, env="AGENT_MAX_RETRIES")
-    quality_threshold: float = Field(default=0.95, env="QUALITY_THRESHOLD")
-    graph_timeout_seconds: int = Field(default=600, env="GRAPH_TIMEOUT_SECONDS")
+    agent_max_retries: int = Field(default=3)
+    quality_threshold: float = Field(default=0.95)
+    graph_timeout_seconds: int = Field(default=600)
 
     # ── OpenTelemetry ───────────────────────────────────────────────────
-    otel_exporter_otlp_endpoint: str = Field(default="", env="OTEL_EXPORTER_OTLP_ENDPOINT")
-    otel_service_name: str = Field(default="ai-data-catalog-agent", env="OTEL_SERVICE_NAME")
+    otel_exporter_otlp_endpoint: str = Field(default="")
+    otel_service_name: str = Field(default="ai-data-catalog-agent")
 
     # ── Great Expectations ──────────────────────────────────────────────
-    gx_expectation_suite: str = Field(default="default_suite", env="GX_EXPECTATION_SUITE")
+    gx_expectation_suite: str = Field(default="default_suite")
 
     # ── dbt ─────────────────────────────────────────────────────────────
-    dbt_target: str = Field(default="dev", env="DBT_TARGET")
-    dbt_profiles_dir: str = Field(default="./profiles", env="DBT_PROFILES_DIR")
+    dbt_target: str = Field(default="dev")
+    dbt_profiles_dir: str = Field(default="./profiles")
 
     # ── File size limits ────────────────────────────────────────────────
-    max_file_size_bytes: int = Field(default=500 * 1024 * 1024, env="MAX_FILE_SIZE_BYTES")  # 500 MB
+    max_file_size_bytes: int = Field(default=500 * 1024 * 1024)  # 500 MB
     supported_formats: tuple[str, ...] = ("json", "csv", "parquet", "avro", "pdf", "txt")
 
     model_config = SettingsConfigDict(
