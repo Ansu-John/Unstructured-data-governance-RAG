@@ -54,7 +54,7 @@ aws iam create-policy \
     {
       \"Sid\": \"SSMParameterAccess\",
       \"Effect\": \"Allow\",
-      \"Action\": [\"ssm:GetParameter\", \"ssm:GetParameters\", \"ssm:GetParametersByPath\", \"ssm:PutParameter\", \"ssm:DeleteParameter\", \"ssm:AddTagsToResource\"],
+      \"Action\": [\"ssm:*\"],
       \"Resource\": \"arn:aws:ssm:*:*:parameter/dev/*\"
     },
     {
@@ -72,7 +72,7 @@ aws iam create-policy \
     {
       \"Sid\": \"KMSManagement\",
       \"Effect\": \"Allow\",
-      \"Action\": [\"kms:CreateKey\", \"kms:CreateAlias\", \"kms:ScheduleKeyDeletion\", \"kms:TagResource\", \"kms:UntagResource\", \"kms:ListAliases\", \"kms:DescribeKey\"],
+      \"Action\": [\"kms:*\"],
       \"Resource\": \"*\"
     }
   ]
@@ -1054,12 +1054,7 @@ These permissions are required on the `github-actions-terraform-role` bootstrap 
       "Sid": "SSMParameterAccess",
       "Effect": "Allow",
       "Action": [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:PutParameter",
-        "ssm:DeleteParameter",
-        "ssm:AddTagsToResource"
+        "ssm:*"
       ],
       "Resource": "arn:aws:ssm:*:*:parameter/dev/*"
     },
@@ -1088,15 +1083,7 @@ These permissions are required on the `github-actions-terraform-role` bootstrap 
       "Sid": "KMSManagement",
       "Effect": "Allow",
       "Action": [
-        "kms:CreateKey",
-        "kms:CreateAlias",
-        "kms:ScheduleKeyDeletion",
-        "kms:TagResource",
-        "kms:UntagResource",
-        "kms:DescribeKey",
-        "kms:ListAliases",
-        "kms:GetKeyRotationStatus",
-        "kms:EnableKeyRotation"
+        "kms:*"
       ],
       "Resource": "*"
     },
