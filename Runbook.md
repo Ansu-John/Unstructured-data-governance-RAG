@@ -609,7 +609,7 @@ uv lock --check
 docker build --no-cache -t ai-catalog-agent:test -f Dockerfile .
 
 # Step 3: If the python:3.12-slim image lacks system dependencies, check apt
-docker run --rm python:3.12-slim bash -c "java -version 2>&1 || echo 'JDK missing'"
+docker run --rm python:3.12-slim-bookworm bash -c "java -version 2>&1 || echo 'JDK missing'"
 ```
 
 **Resolution:**

@@ -11,7 +11,7 @@
 # =============================================================================
 
 # ── Stage 1: Dependency Builder ──────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
 
 ARG BUILD_DATE
 ARG BUILD_REVISION
@@ -49,7 +49,7 @@ RUN uv sync \
     --no-install-project
 
 # ── Stage 2: Runtime Image ───────────────────────────────────────────────────
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 
 ARG BUILD_DATE
 ARG BUILD_REVISION
