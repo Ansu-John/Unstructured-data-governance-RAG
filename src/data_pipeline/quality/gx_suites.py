@@ -22,11 +22,9 @@ Usage (PySpark submit):
 """
 
 from __future__ import annotations
-
 import argparse
 import json
 import logging
-import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -38,9 +36,12 @@ from great_expectations.data_context import EphemeralDataContext
 from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import current_timestamp, input_file_name, lit
-
 from src.common.config import settings
+import os
 
+# Hard-disable OpenTelemetry exports so it doesn't hang on shutdown
+os.environ["OTEL_TRACES_EXPORTER"] = "none"
+os.environ["OTEL_SDK_DISABLED"] = "true"
 # ---------------------------------------------------------------------------
 # Logging & Telemetry bootstrap
 # ---------------------------------------------------------------------------
@@ -556,13 +557,13 @@ def main() -> None:
 
         # 4. Persist run result to catalog (if DB reachable)
         _persist_run_to_db(run_result)
-
     if not all_passed:
         logger.error("One or more assets FAILED validation. See quarantine for details.")
+        spark.stop()  # <-- ADD THIS HERE to cleanly close Spark on failure
         raise SystemExit(1)
 
     logger.info("All assets passed quality validation.")
-
+    spark.stop()  # <-- ADD THIS HERE to cleanly close Spark on success
 
 def _persist_run_to_db(result: QualityRunResult) -> None:
     """Best-effort write of the run result to the catalog quality_runs table."""
