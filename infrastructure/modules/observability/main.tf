@@ -55,7 +55,7 @@ locals {
   }
 }
 
-resource "aws_logs_log_group" "main" {
+resource "aws_cloudwatch_log_group" "main" {
   for_each = local.log_groups
 
   name              = each.value
@@ -72,10 +72,10 @@ resource "aws_logs_log_group" "main" {
 # Metric Filters — extract signals from structured logs
 # ---------------------------------------------------------------------------
 
-resource "aws_logs_metric_filter" "quality_failure" {
+resource "aws_cloudwatch_log_metric_filter" "quality_failure" {
   name           = "${var.environment}-quality-failure-count"
   pattern        = "\"QUALITY FAIL\""
-  log_group_name = aws_logs_log_group.main["agent_graph"].name
+  log_group_name = aws_cloudwatch_log_group.main["agent_graph"].name
 
   metric_transformation {
     name          = "QualityFailureCount"
@@ -85,10 +85,10 @@ resource "aws_logs_metric_filter" "quality_failure" {
   }
 }
 
-resource "aws_logs_metric_filter" "agent_error" {
+resource "aws_cloudwatch_log_metric_filter" "agent_error" {
   name           = "${var.environment}-agent-error-count"
   pattern        = "\"ERROR\""
-  log_group_name = aws_logs_log_group.main["agent_graph"].name
+  log_group_name = aws_cloudwatch_log_group.main["agent_graph"].name
 
   metric_transformation {
     name          = "AgentErrorCount"
@@ -98,10 +98,10 @@ resource "aws_logs_metric_filter" "agent_error" {
   }
 }
 
-resource "aws_logs_metric_filter" "quarantine_event" {
+resource "aws_cloudwatch_log_metric_filter" "quarantine_event" {
   name           = "${var.environment}-quarantine-event"
   pattern        = "\"QUARANTINE\""
-  log_group_name = aws_logs_log_group.main["quality_runs"].name
+  log_group_name = aws_cloudwatch_log_group.main["quality_runs"].name
 
   metric_transformation {
     name          = "QuarantineEventCount"
@@ -111,10 +111,10 @@ resource "aws_logs_metric_filter" "quarantine_event" {
   }
 }
 
-resource "aws_logs_metric_filter" "catalog_success" {
+resource "aws_cloudwatch_log_metric_filter" "catalog_success" {
   name           = "${var.environment}-catalog-success-count"
   pattern        = "\"Cataloged\""
-  log_group_name = aws_logs_log_group.main["agent_graph"].name
+  log_group_name = aws_cloudwatch_log_group.main["agent_graph"].name
 
   metric_transformation {
     name          = "CatalogSuccessCount"
@@ -235,7 +235,7 @@ resource "aws_cloudwatch_dashboard" "main" {
       {
         type = "log"
         properties = {
-          query   = "SOURCE '${aws_logs_log_group.main["agent_graph"].name}' | fields @timestamp, @message | filter @message like /ERROR|FAIL|quarantine/ | sort @timestamp desc | limit 20"
+          query   = "SOURCE '${aws_cloudwatch_log_group.main["agent_graph"].name}' | fields @timestamp, @message | filter @message like /ERROR|FAIL|quarantine/ | sort @timestamp desc | limit 20"
           region  = "us-east-1"
           title   = "${var.environment} — Recent Agent Errors"
         }
@@ -251,14 +251,14 @@ resource "aws_cloudwatch_dashboard" "main" {
 output "log_group_names" {
   description = "Map of log group names by purpose"
   value = {
-    for k, v in aws_logs_log_group.main : k => v.name
+    for k, v in aws_cloudwatch_log_group.main : k => v.name
   }
 }
 
 output "log_group_arns" {
   description = "Map of log group ARNs by purpose"
   value = {
-    for k, v in aws_logs_log_group.main : k => v.arn
+    for k, v in aws_cloudwatch_log_group.main : k => v.arn
   }
 }
 
