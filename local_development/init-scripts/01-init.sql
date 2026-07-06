@@ -83,7 +83,11 @@ CREATE TABLE IF NOT EXISTS catalog.data_assets (
     embedding       VECTOR(1536),          -- Amazon Titan Embedding dimension
     metadata_json   JSONB       DEFAULT '{}'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Explicitly named table-level constraints
+    CONSTRAINT data_assets_asset_type_check CHECK (asset_type IN ('table','view','file','stream','topic','model')),
+    CONSTRAINT uq_data_assets_file_path UNIQUE (file_path)
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_assets_embedding
@@ -97,12 +101,6 @@ CREATE INDEX IF NOT EXISTS idx_data_assets_source_system
 CREATE INDEX IF NOT EXISTS idx_data_assets_tags
     ON catalog.data_assets USING GIN (tags);
 
-ALTER TABLE catalog.data_assets 
-    ADD CONSTRAINT data_assets_asset_type_check 
-    CHECK (asset_type IN ('table','view','file','stream','topic','model'));
-
-ALTER TABLE catalog.data_assets 
-    ADD CONSTRAINT uq_data_assets_file_path UNIQUE (file_path);
 
 -- ============================================================================
 -- QUALITY METRICS HISTORY

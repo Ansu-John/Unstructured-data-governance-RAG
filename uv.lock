@@ -12,6 +12,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
+
 [[package]]
 name = "agate"
 version = "1.9.1"
