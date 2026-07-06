@@ -175,7 +175,8 @@ class TestGraphHappyPath:
         graph = build_quality_catalog_graph()
         assert graph is not None
 
-    def test_ingestion_node_populates_files(self, mock_s3):
+    @pytest.mark.usefixtures("mock_s3")
+    def test_ingestion_node_populates_files(self):
         """Ingestion node discovers files and adds them to state."""
         state = new_run_state(thread_id="test-ingestion")
         result = ingestion_node(state)
@@ -209,7 +210,8 @@ class TestGraphHappyPath:
         # file-001 should be profiled (has passing quality result)
         assert "file-001" in result["profile_results"]
 
-    def test_cataloging_node_produces_entries(self, test_state, mock_bedrock):
+    @pytest.mark.usefixtures("mock_bedrock")
+    def test_cataloging_node_produces_entries(self, test_state):
         """Cataloging node creates entries for profiled files."""
         result = cataloging_node(test_state)
 
@@ -224,7 +226,8 @@ class TestGraphHappyPath:
         assert "embedding" in entry
 
     @pytest.mark.asyncio
-    async def test_full_graph_stream_success(self, mock_s3, mock_bedrock):
+    @pytest.mark.usefixtures("mock_s3","mock_bedrock")
+    async def test_full_graph_stream_success(self):
         """Verify the full graph completes the success path."""
         graph = build_quality_catalog_graph()
         initial = new_run_state(thread_id="test-full-success")
@@ -318,7 +321,8 @@ class TestGraphErrorHandling:
         except Exception as exc:
             pytest.fail(f"Ingestion node crashed on empty state: {exc}")
 
-    def test_graph_handles_multiple_quality_outcomes(self, test_state, mock_bedrock):
+    @pytest.mark.usefixtures("mock_bedrock")
+    def test_graph_handles_multiple_quality_outcomes(self, test_state):
         """Graph handles mixed pass/fail quality outcomes."""
         graph = build_quality_catalog_graph()
 

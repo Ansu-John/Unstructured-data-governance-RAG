@@ -22,22 +22,24 @@ Usage (PySpark submit):
 """
 
 from __future__ import annotations
+
 import argparse
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
 import great_expectations as gx
 import great_expectations.expectations as gxe
 from great_expectations.core.expectation_suite import ExpectationSuite
 from great_expectations.data_context import EphemeralDataContext
-from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import current_timestamp, input_file_name, lit
+
 from src.common.config import settings
-import os
 
 # Hard-disable OpenTelemetry exports so it doesn't hang on shutdown
 os.environ["OTEL_TRACES_EXPORTER"] = "none"
@@ -354,10 +356,17 @@ class GreatExpectationsValidator:
             class_name = "".join(word.capitalize() for word in exp_name.split("_"))
 
             # Fetch the actual expectation class dynamically from the gxe module
-            ExpectationClass = getattr(gxe, class_name)
+            try:
+                expectation_class = getattr(gxe, class_name)
+            except AttributeError as exc:
+                logger.error(
+                    "Invalid expectation name '%s' in suite '%s'. Could not map to class '%s'.",
+                    exp_name, self.suite_name, class_name
+                )
+                raise ValueError(f"Unknown Great Expectations class: {class_name}") from exc
 
             # Instantiate the object and add it to the suite
-            suite.add_expectation(ExpectationClass(**kwargs, meta=meta))
+            suite.add_expectation(expectation_class(**kwargs, meta=meta))
 
         # Explicitly add the suite to the context
         self._context.suites.add(suite)
