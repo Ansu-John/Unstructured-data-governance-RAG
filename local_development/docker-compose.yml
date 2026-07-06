@@ -14,7 +14,7 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - pgvector_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+      - ./init-scripts/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d postgres"]
       interval: 5s
@@ -43,7 +43,7 @@ services:
       LS_LOG: "warn"
     volumes:
       - localstack_data:/var/lib/localstack
-      - ./init-scripts/02-init-s3-buckets.sh:/etc/localstack/init/ready.d/02-init-s3-buckets.sh:ro
+      - ./init-scripts/localstack/02-init-s3-buckets.sh:/etc/localstack/init/ready.d/02-init-s3-buckets.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health | grep -q '\"s3\":\"available\"'"]
       interval: 10s
