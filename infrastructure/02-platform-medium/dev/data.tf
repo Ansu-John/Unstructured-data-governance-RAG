@@ -38,6 +38,13 @@ data "aws_ssm_parameter" "kms_key_arn" {
 # Data transforms
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# AWS context data sources
+# ---------------------------------------------------------------------------
+
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
 locals {
   vpc_id             = data.aws_ssm_parameter.vpc_id.value
   private_subnet_ids = split(",", data.aws_ssm_parameter.private_subnet_ids.value)

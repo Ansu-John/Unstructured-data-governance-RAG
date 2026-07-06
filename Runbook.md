@@ -16,6 +16,8 @@ Before the first deployment, an SRE must provision:
 2. **DynamoDB Lock Table:** `ai-catalog-terraform-locks` (created outside Terraform)
 3. **GitHub OIDC Provider:** IAM role for GitHub Actions with trust to the repo (`github-actions-terraform-role`)
 
+> **CRITICAL:** The `github-actions-terraform-role` must be created with the minimum permissions documented in **Appendix D** below. Without these, Terraform cannot read SSM parameters from Tier 1, read/write its own state, or create/manage IAM policies. After the first `terraform apply` completes, Terraform will manage these policies going forward — but the role must have them at Day 0.
+
 ### Bootstrap Validation
 
 ```bash
@@ -915,7 +917,9 @@ fields @timestamp, @message
 
 ### D — IAM Permissions for GitHub Actions CI/CD Role
 
-These permissions are required on the `github-actions-terraform-role` bootstrap role. Terraform (in `02-platform-medium/dev/iam.tf`) attaches the ECR push and ECS deploy policies automatically, but the base role must exist first.
+These permissions are required on the `github-actions-terraform-role` bootstrap role. Terraform (in `02-platform-medium/dev/iam.tf`) manages the CI/CD-specific permissions (ECR push, ECS deploy, SSM read) going forward — but the base role must exist first with these minimum permissions for Terraform to run.
+
+> ⚠️ **Chicken-and-egg note:** The SSM read, Terraform state, and IAM self-management permissions must be on the role BEFORE the first `terraform apply`. On the first run, Terraform creates the policies listed in the table below and attaches them to the role. After that, Terraform manages permissions going forward. To bootstrap the role for the very first time, an admin must attach the **Minimum Bootstrap Policy** manually.
 
 **Minimum bootstrap role trust policy:**
 ```json
@@ -941,10 +945,119 @@ These permissions are required on the `github-actions-terraform-role` bootstrap 
 }
 ```
 
-**Permissions Terraform attaches (auto-provisioned):**
+**Minimum Bootstrap IAM Policy (must be attached before first `terraform apply`):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TerraformStateBackend",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::ai-catalog-terraform-state-*",
+        "arn:aws:s3:::ai-catalog-terraform-state-*/*"
+      ]
+    },
+    {
+      "Sid": "TerraformStateLocking",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/ai-catalog-terraform-locks"
+    },
+    {
+      "Sid": "SSMParameterAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:AddTagsToResource"
+      ],
+      "Resource": "arn:aws:ssm:*:*:parameter/dev/*"
+    },
+    {
+      "Sid": "IAMSelfManagement",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:GetRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:policy/dev-*",
+        "arn:aws:iam::*:role/github-actions-terraform-role"
+      ]
+    },
+    {
+      "Sid": "ECRReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DescribeRepositories",
+        "ecr:ListImages",
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ECSReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DescribeServices",
+        "ecs:ListServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTaskDefinitions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadAWSResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBSubnetGroups"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**Policies Terraform attaches (auto-provisioned after first apply):**
 
 | Policy Name | Actions | Purpose |
 |-------------|---------|---------|
+| `{env}-ssm-parameter-access` | `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath`, `ssm:PutParameter`, `ssm:DeleteParameter`, `ssm:AddTagsToResource` | Cross-tier SSM handoff (read Tier 1 parameters, write Tier 2 parameters for Tier 3) |
+| `{env}-terraform-state-access` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:DescribeTable` | Terraform state backend and locking |
+| `{env}-iam-self-management` | `iam:CreatePolicy`, `iam:CreatePolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`, `iam:GetPolicy`, `iam:GetPolicyVersion`, `iam:ListPolicyVersions`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:ListAttachedRolePolicies`, `iam:GetRole` | Allow Terraform to manage its own IAM policies |
 | `{env}-ecr-push-policy` | `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `ecr:DescribeRepositories`, `ecr:ListImages` | Push Docker images to ECR |
 | `{env}-ecs-deploy-policy` | `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:DescribeServices`, `ecs:UpdateService`, `ecs:DescribeClusters`, `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:WaitUntilServicesStable`, `iam:PassRole` | Deploy to ECS |
 
