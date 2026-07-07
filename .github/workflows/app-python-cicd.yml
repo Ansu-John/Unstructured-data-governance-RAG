@@ -277,9 +277,14 @@ jobs:
           done
       - name: Set Image Output
         id: set-image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          SHA: ${{ github.sha }}
         run: |
-          echo "full_image=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
+          FULL_URI="${REGISTRY}/${REPOSITORY}:${SHA}"
+          echo "full_image=$FULL_URI" >> "$GITHUB_OUTPUT"
+          echo "Setting output full_image to: $FULL_URI" # This will print to your logs
 
   deploy-ecs:
     name: "Deploy to ECS"
@@ -322,7 +327,8 @@ jobs:
         with:
           task-definition: task-def.json
           container-name: agent-orchestrator
-          image: ${{ needs.docker-build.outputs.image }}
+          #image: ${{ needs.docker-build.outputs.image }}
+          image: 932021957888.dkr.ecr.us-east-1.amazonaws.com/ai-catalog-agent:latest
 
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
