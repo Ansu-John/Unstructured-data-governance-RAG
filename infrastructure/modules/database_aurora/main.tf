@@ -179,11 +179,13 @@ resource "aws_rds_cluster_parameter_group" "aurora" {
   parameter {
     name  = "shared_preload_libraries"
     value = "pg_stat_statements,vector"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "rds.logical_replication"
     value = "1"
+    apply_method = "pending-reboot"
   }
 
   tags = merge(var.tags, {
@@ -196,11 +198,8 @@ resource "aws_db_parameter_group" "aurora" {
   family      = "aurora-postgresql16"
   description = "DB parameter group for pgvector configuration"
 
-  parameter {
-    name         = "vector.dimension_limit"
-    value        = "2048"
-    apply_method = "immediate"
-  }
+  # The vector.dimension_limit parameter block has been removed
+  # because it is not supported by the AWS RDS API.
 
   tags = merge(var.tags, {
     Environment = var.environment

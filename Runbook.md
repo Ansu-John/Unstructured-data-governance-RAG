@@ -55,7 +55,7 @@ aws iam create-policy \
       \"Sid\": \"SSMParameterAccess\",
       \"Effect\": \"Allow\",
       \"Action\": [\"ssm:*\"],
-      \"Resource\": \"arn:aws:ssm:*:*:parameter/dev/*\"
+      \"Resource\": \"*\"
     },
     {
       \"Sid\": \"IAMSelfManagement\",
@@ -1056,7 +1056,7 @@ These permissions are required on the `github-actions-terraform-role` bootstrap 
       "Action": [
         "ssm:*"
       ],
-      "Resource": "arn:aws:ssm:*:*:parameter/dev/*"
+      "Resource": "*"
     },
     {
       "Sid": "IAMSelfManagement",
