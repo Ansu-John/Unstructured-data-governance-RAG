@@ -316,7 +316,7 @@ jobs:
 
       - name: Fill Image URI
         id: render-task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v2
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-def.json
           container-name: agent-orchestrator
