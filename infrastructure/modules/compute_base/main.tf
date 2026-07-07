@@ -163,6 +163,18 @@ resource "aws_iam_role_policy" "ecs_execution_extra" {
         ]
         Resource = ["*"]
       },
+      # ----------------------------------------------------
+      # NEW BLOCK: Allow ECS to pull the database secret
+      # ----------------------------------------------------
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          "arn:aws:secretsmanager:${data.aws_region.current.name}:*:secret:${var.environment}-ai-catalog-db-credentials-*"
+        ]
+      }
     ]
   })
 }
