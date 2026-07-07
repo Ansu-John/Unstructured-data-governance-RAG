@@ -8,6 +8,9 @@
 # ============================================================================
 
 # ── EventBridge Rule: S3 Object Created in Bronze ───────────────────────
+data "aws_ecs_cluster" "main" {
+  cluster_name = "${var.environment}-ai-catalog-ecs"
+}
 
 resource "aws_cloudwatch_event_rule" "bronze_landing" {
   name        = "${var.environment}-bronze-landing-trigger"
