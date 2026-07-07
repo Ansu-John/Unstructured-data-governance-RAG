@@ -10,6 +10,7 @@
 # ============================================================================
 
 # ── Task Definition: Agent Orchestrator ─────────────────────────────────
+data "aws_region" "current" {}
 
 resource "aws_ecs_task_definition" "agent_orchestrator" {
   family                   = "${var.environment}-ai-catalog-agent"
@@ -38,7 +39,7 @@ resource "aws_ecs_task_definition" "agent_orchestrator" {
         { name = "LOG_LEVEL",            value = "INFO" },
         { name = "AWS_REGION",           value = "us-east-1" },
         { name = "OTEL_SERVICE_NAME",     value = "ai-catalog-agent" },
-        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "https://otlp.cloudwatch.${var.aws_region}.amazonaws.com" },
+        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "https://otlp.cloudwatch.${data.aws_region.current.name}.amazonaws.com" },
       ]
 
       secrets = [
