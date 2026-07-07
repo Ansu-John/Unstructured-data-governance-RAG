@@ -75,7 +75,7 @@ resource "aws_cloudwatch_metric_alarm" "quarantine_anomaly" {
       period      = 300
       stat        = "Sum"
     }
-    return_data = false
+    return_data = true
   }
 }
 
