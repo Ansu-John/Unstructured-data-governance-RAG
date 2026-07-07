@@ -55,17 +55,28 @@ resource "aws_cloudwatch_metric_alarm" "quality_spike" {
 resource "aws_cloudwatch_metric_alarm" "quarantine_anomaly" {
   alarm_name          = "${var.environment}-quarantine-anomaly"
   comparison_operator = "GreaterThanUpperThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "QuarantineEventCount"
-  namespace           = "AICatalog/Quality"
-  period              = "3600"
+  evaluation_periods  = 2
+  threshold_metric_id = "e1" # Must match the ID of the anomaly model query
 
-  statistic           = "Sum"
-  threshold_metric_id = "m1"
+  # 1. The Anomaly Detection Model
+  metric_query {
+    id          = "e1"
+    expression  = "ANOMALY_DETECTION_BAND(m1, 2)" # m1 references the metric below
+    label       = "Quarantine Rate (Expected)"
+    return_data = true
+  }
 
-  alarm_description = "Quarantine rate is anomalously high — investigate Bronze data quality"
-
-  tags = var.tags
+  # 2. The Actual Metric
+  metric_query {
+    id = "m1"
+    metric {
+      metric_name = "YourQuarantineMetricName" 
+      namespace   = "YourAppNamespace"         
+      period      = 300
+      stat        = "Sum"
+    }
+    return_data = false
+  }
 }
 
 # ── Alarm: ECS Service Health ───────────────────────────────────────────
