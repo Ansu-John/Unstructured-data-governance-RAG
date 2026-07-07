@@ -205,7 +205,7 @@ jobs:
 
     # 1. Declare the output here so other jobs can see it
     outputs:
-      image: ${{ steps.set-image.outputs.FULL_IMAGE_URI }}
+      image: ${{ steps.set-image.outputs.full_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -283,7 +283,7 @@ jobs:
 
   deploy-ecs:
     name: "Deploy to ECS"
-    needs: [docker-build]
+    needs: [infra-check, docker-build]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
