@@ -66,6 +66,9 @@ jobs:
 
       - name: Terraform Validate
         run: terraform validate
+        
+      - name: Untaint ECS Role
+        run: terraform untaint aws_iam_service_linked_role.ecs || true
 
       - name: Terraform Plan
         id: plan
