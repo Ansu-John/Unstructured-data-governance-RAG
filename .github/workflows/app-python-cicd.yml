@@ -203,6 +203,9 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
+    # 1. Declare the output here so other jobs can see it
+    outputs:
+      image: ${{ steps.set-image.outputs.FULL_IMAGE_URI }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -272,12 +275,11 @@ jobs:
             fi
             sleep 5
           done
+      - name: Set Image Output
+        id: set-image
+        run: |
+          echo "full_image=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Output Image URI
-        run: echo "image=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}" >> "$GITHUB_OUTPUT"
-
-    outputs:
-      image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
   deploy-ecs:
     name: "Deploy to ECS"
