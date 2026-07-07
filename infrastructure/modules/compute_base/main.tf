@@ -53,6 +53,10 @@ variable "tags" {
 # ECS Cluster (Fargate)
 # ---------------------------------------------------------------------------
 
+data "aws_ecs_cluster" "main" {
+  cluster_name = "${var.environment}-ai-catalog-ecs"
+}
+
 resource "aws_ecs_cluster" "main" {
   name = var.ecs_cluster_name != "" ? var.ecs_cluster_name : "${var.environment}-ai-catalog-ecs"
 

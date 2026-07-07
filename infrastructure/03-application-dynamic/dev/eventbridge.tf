@@ -39,7 +39,7 @@ resource "aws_cloudwatch_event_rule" "bronze_landing" {
 resource "aws_cloudwatch_event_target" "run_agent" {
   rule      = aws_cloudwatch_event_rule.bronze_landing.name
   event_bus_name = "default"
-  arn       = local.ecs_cluster_name
+  arn       = data.aws_ecs_cluster.main.arn
   role_arn  = aws_iam_role.eventbridge_ecs.arn
 
   ecs_target {
@@ -133,7 +133,7 @@ resource "aws_cloudwatch_event_rule" "periodic_quality" {
 
 resource "aws_cloudwatch_event_target" "periodic_quality" {
   rule      = aws_cloudwatch_event_rule.periodic_quality.name
-  arn       = local.ecs_cluster_name
+  arn       = data.aws_ecs_cluster.main.arn
   role_arn  = aws_iam_role.eventbridge_ecs.arn
 
   ecs_target {

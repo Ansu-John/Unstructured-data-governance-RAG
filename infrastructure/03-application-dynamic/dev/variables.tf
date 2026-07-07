@@ -8,6 +8,12 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "aws_region" {
+  description = "The AWS region for the deployment"
+  type        = string
+  default     = "us-east-1"
+}
+
 variable "container_image_uri" {
   description = "ECR image URI for the agent orchestrator container"
   type        = string
