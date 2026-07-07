@@ -178,7 +178,7 @@ resource "aws_rds_cluster_parameter_group" "aurora" {
 
   parameter {
     name  = "shared_preload_libraries"
-    value = "pg_stat_statements,vector"
+    value = "pg_stat_statements"
     apply_method = "pending-reboot"
   }
 
