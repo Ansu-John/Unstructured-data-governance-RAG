@@ -10,11 +10,17 @@ Graph topology:
     [START]
        │
        ▼
-  ┌─────────────┐
-  │  ingestion   │  Scan Bronze layer, discover files
-  └──────┬──────┘
-         │
-         ▼
+  ┌──────────────────┐
+  │   ingestion       │  Scan Bronze layer, discover files
+  └───────┬──────────┘
+          │
+          ▼
+  ┌──────────────────┐
+  │ fetch_quality_   │  Read GX results from catalog.quality_runs,
+  │   results        │  populate state["quality_results"]
+  └───────┬──────────┘
+          │
+          ▼
   ┌─────────────┐
   │  profiling   │  Compute schema/stats for passing files
   └──────┬──────┘
@@ -51,6 +57,9 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import time
+import uuid
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
@@ -59,7 +68,8 @@ from langgraph.graph.graph import CompiledGraph
 from src.agents.nodes.cataloging import cataloging_node
 from src.agents.nodes.ingestion import ingestion_node
 from src.agents.nodes.profiling import profiling_node
-from src.agents.state import AgentState, new_run_state
+from src.agents.nodes.quality_gate import fetch_quality_results_node
+from src.agents.state import AgentState, ProcessingStatus, new_run_state
 
 logger = logging.getLogger(__name__)
 
@@ -82,15 +92,32 @@ def quality_router(state: AgentState) -> Literal["cataloging", "log_fail_and_qua
     active file and decide whether to proceed to cataloging or enter the
     quarantine/failure loop.
 
+    Decision logic:
+      1. No quality result for current_file_id → quarantine
+         (the quality gate node didn't find GX results in the DB; the file
+          will be retried up to MAX_RETRIES times, then permanently failed)
+      2. score >= threshold → cataloging
+      3. score < threshold → quarantine
+
     The decision is per-file (current_file_id), not aggregate, so one bad
     file doesn't block good ones.
     """
     current_file_id = state.get("current_file_id", "")
     quality_results: dict[str, Any] = state.get("quality_results", {})
 
-    if not current_file_id or current_file_id not in quality_results:
-        logger.info("No specific quality result to evaluate — routing to cataloging")
+    if not current_file_id:
+        logger.info("No current_file_id set — routing to cataloging")
         return "cataloging"
+
+    if current_file_id not in quality_results:
+        logger.warning(
+            "No quality result found for file=%s — routing to quarantine "
+            "(GX pipeline may not have completed, or the file is not yet validated). "
+            "The file will be retried up to %d times.",
+            current_file_id,
+            MAX_RETRIES_PER_FILE,
+        )
+        return "log_fail_and_quarantine"
 
     qr = quality_results[current_file_id]
     score = qr.get("score", 0.0)
@@ -180,7 +207,7 @@ def log_fail_and_quarantine(state: AgentState) -> dict[str, Any]:
     if retry_count + 1 >= MAX_RETRIES_PER_FILE:
         for f in files:
             if f.get("file_id") == current_file_id:
-                f["status"] = "FAILED"
+                f["status"] = ProcessingStatus.FAILED.value
         result["files"] = files
 
     return result
@@ -202,7 +229,7 @@ def advance_file_node(state: AgentState) -> dict[str, Any]:
 
     # FIX: Find the next file that hasn't been cataloged AND hasn't permanently failed
     for f in files:
-        if f["file_id"] not in cataloged_ids and f.get("status") != "FAILED":
+        if f["file_id"] not in cataloged_ids and f.get("status") != ProcessingStatus.FAILED.value:
             logger.info("Advancing to next file: %s (%s)", f["file_name"], f["file_id"])
             return {
                 "current_file_id": f["file_id"],
@@ -219,8 +246,9 @@ def build_quality_catalog_graph() -> StateGraph:
     routing.
 
     The graph loops through each discovered file:
-      advance_file → [ingestion → profiling → (quality_router) →
-                      cataloging|log_fail] → advance_file → ... → END
+      advance_file → [ingestion → fetch_quality_results → profiling →
+                      (quality_router) → cataloging|log_fail] →
+                      advance_file → ... → END
 
     Returns a compiled StateGraph ready for invocation.
 
@@ -234,6 +262,7 @@ def build_quality_catalog_graph() -> StateGraph:
 
     # ── Register nodes ──────────────────────────────────────────────────
     workflow.add_node("ingestion", ingestion_node)
+    workflow.add_node("fetch_quality_results", fetch_quality_results_node)
     workflow.add_node("profiling", profiling_node)
     workflow.add_node("cataloging", cataloging_node)
     workflow.add_node("log_fail_and_quarantine", log_fail_and_quarantine)
@@ -242,8 +271,9 @@ def build_quality_catalog_graph() -> StateGraph:
     # ── Edges ───────────────────────────────────────────────────────────
     workflow.set_entry_point("ingestion")
 
-    # Sequential pipeline
-    workflow.add_edge("ingestion", "profiling")
+    # Sequential pipeline: discover → fetch quality → profile
+    workflow.add_edge("ingestion", "fetch_quality_results")
+    workflow.add_edge("fetch_quality_results", "profiling")
 
     # Conditional edge: quality check → cataloging or quarantine
     workflow.add_conditional_edges(
@@ -306,8 +336,9 @@ def compile_graph_with_checkpointer() -> CompiledGraph:
             port=int(os.environ.get("DB_PORT", "5433")),
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
-            autocommit=True, # <-- ADD THIS to fix the index error
-            row_factory=dict_row,  # <-- 2. ADD THIS ARGUMENT
+            password=os.environ.get("DB_PASSWORD", ""),
+            autocommit=True,
+            row_factory=dict_row,
         ) # type: ignore[arg-type]
         checkpointer = PostgresSaver(conn)
         checkpointer.setup()  # Ensure tables exist
@@ -339,6 +370,7 @@ def run_graph(
 
     Args:
         thread_id: Optional thread identifier for checkpointing.
+                   A UUID is generated if not provided.
         bronze_paths: Optional list of Bronze S3 prefixes to scan.
 
     Returns:
@@ -347,11 +379,14 @@ def run_graph(
     if bronze_paths:
         os.environ["BRONZE_S3_PATHS"] = ",".join(bronze_paths)
 
+    # Generate a default thread_id if none provided (PostgresSaver requires it)
+    resolved_thread_id = thread_id or str(uuid.uuid4())
+
     # Create the config dict
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": resolved_thread_id}}
 
     graph = compile_graph_with_checkpointer()
-    initial_state = new_run_state(thread_id=thread_id)
+    initial_state = new_run_state(thread_id=resolved_thread_id)
 
     final_state: dict[str, Any] = {}
     for event in graph.stream(initial_state, config=config ): # type: ignore[arg-type]
@@ -401,26 +436,67 @@ def _start_healthcheck_server() -> None:
 # Module-level quick test
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+# ---------------------------------------------------------------------------
+# CLI entrypoint (called by `ai-catalog-agent` console_scripts entry point)
+# ---------------------------------------------------------------------------
 
-    # Initialize OpenTelemetry
-    from src.common.telemetry import init_telemetry
 
-    init_telemetry(
-        service_name="ai-catalog-agent",
-        environment=os.environ.get("ENVIRONMENT", "local"),
+def main() -> None:
+    """
+    CLI entrypoint for the `ai-catalog-agent` console script.
+
+    This function reuses the ``__main__`` startup logic:
+      1. Configure logging with forced flush.
+      2. Initialize OpenTelemetry.
+      3. Start the healthcheck HTTP server.
+      4. Execute the full graph pipeline.
+      5. Keep the container alive for ECS service health checks.
+
+    Usage:
+        ai-catalog-agent
+        python -m src.agents.graph_builder
+    """
+    print("=== AI Catalog Agent starting up ===", flush=True)
+    sys.stderr.flush()
+
+    logging.basicConfig(
+        level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+        force=True,
     )
+    sys.stderr.flush()
 
-    # Start healthcheck for ECS
-    _start_healthcheck_server()
+    try:
+        from src.common.telemetry import init_telemetry
 
-    result = run_graph(thread_id="local-test-run")
-    print("\n=== FINAL STATE ===")
-    print(f"  Files discovered:    {len(result.get('files', []))}")
-    print(f"  Profiles computed:   {len(result.get('profile_results', {}))}")
-    print(f"  Catalog entries:     {len(result.get('catalog_entries', []))}")
-    print(f"  Errors:              {len(result.get('errors', []))}")
-    print(f"  Ingestion:           {result.get('ingestion_summary', 'N/A')}")
-    print(f"  Profiling:           {result.get('profiling_summary', 'N/A')}")
-    print(f"  Cataloging:          {result.get('cataloging_summary', 'N/A')}")
+        init_telemetry(
+            service_name="ai-catalog-agent",
+            environment=os.environ.get("ENVIRONMENT", "local"),
+        )
+
+        _start_healthcheck_server()
+
+        logger.info("Starting graph execution")
+
+        result = run_graph()
+
+        print("\n=== FINAL STATE ===")
+        print(f"  Files discovered:    {len(result.get('files', []))}")
+        print(f"  Profiles computed:   {len(result.get('profile_results', {}))}")
+        print(f"  Catalog entries:     {len(result.get('catalog_entries', []))}")
+        print(f"  Errors:              {len(result.get('errors', []))}")
+
+    except Exception:
+        logging.critical("FATAL: Graph execution crashed", exc_info=True)
+        sys.stderr.flush()
+        sys.stdout.flush()
+        sys.exit(1)
+
+    logger.info("Graph execution complete — entering idle loop for health checks")
+    while True:
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()

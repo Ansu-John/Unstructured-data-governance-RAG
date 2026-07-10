@@ -77,10 +77,10 @@ class Settings(BaseSettings):
     aws_region: str = Field(default="us-east-1")
     aws_endpoint_url: str | None = Field(default=None)
     bedrock_model_id: str = Field(
-        default="anthropic.claude-3-5-haiku-20241022-v1:0"
+        default="anthropic.claude-3-5-haiku-20241022-v2:0"
     )
     bedrock_embedding_model_id: str = Field(
-        default="amazon.titan-embed-text-v1"
+        default="amazon.titan-embed-text-v2:0"
     )
 
     # ── Agent graph ─────────────────────────────────────────────────────

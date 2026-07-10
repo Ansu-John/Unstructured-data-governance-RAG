@@ -273,7 +273,7 @@ def _generate_description(file_dict: dict[str, Any], profile_dict: dict[str, Any
         )
 
         response = bedrock.invoke_model(
-            modelId="anthropic.claude-3-5-haiku-20241022-v1:0",
+            modelId=settings.bedrock_model_id,
             contentType="application/json",
             accept="application/json",
             body=json.dumps(
@@ -336,7 +336,7 @@ def _compute_embedding(text: str) -> list[float]:
         )
 
         response = bedrock.invoke_model(
-            modelId="amazon.titan-embed-text-v1",
+            modelId=settings.bedrock_embedding_model_id,
             contentType="application/json",
             accept="application/json",
             body=json.dumps(
@@ -409,6 +409,7 @@ def _persist_to_vector_store(entry: CatalogEntry) -> None:
             port=int(os.environ.get("DB_PORT", "5433")),
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
+            password=os.environ.get("DB_PASSWORD", ""),
         )
 
         with conn.cursor() as cur:

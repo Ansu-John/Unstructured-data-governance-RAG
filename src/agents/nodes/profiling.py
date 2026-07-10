@@ -19,17 +19,18 @@ Design decisions:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    col,
-    count,
-    countDistinct,
-    isnan,
-    isnull,
-    when,
-)
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
+    from pyspark.sql.functions import (  # noqa: F401  (used in _spark_profile)
+        col,
+        count,
+        countDistinct,
+        isnan,
+        isnull,
+        when,
+    )
 
 try:
     from opentelemetry import trace
@@ -148,8 +149,11 @@ def profiling_node(state: AgentState) -> dict[str, Any]:
 def _get_spark() -> SparkSession | None:
     """Get or create a SparkSession. Returns None if unavailable."""
     try:
+        from pyspark.sql import SparkSession  # Lazy import — avoids crash at module level
+
         return SparkSession.builder.appName("ProfilingNode").getOrCreate()
-    except Exception:
+    except Exception as exc:
+        logger.warning("SparkSession unavailable: %s", exc)
         return None
 
 
@@ -174,6 +178,11 @@ def _compute_profile(
 
 def _spark_profile(spark: SparkSession, path: str, file_id: str) -> ProfileResult:
     """Distributed profile computation via PySpark."""
+    # Lazy import — avoids crash at module level if PySpark/Java is absent
+    from pyspark.sql.functions import (  # noqa: I001
+        col, count, countDistinct, isnan, isnull, when,
+    )
+
     # Read the file based on format
     fmt = path.split(".")[-1] if "." in path else "parquet"
     reader = spark.read

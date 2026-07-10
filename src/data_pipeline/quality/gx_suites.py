@@ -588,6 +588,7 @@ def _persist_run_to_db(result: QualityRunResult) -> None:
             port=int(os.environ.get("DB_PORT", "5433")),
             dbname=os.environ.get("DB_NAME", "postgres"),
             user=os.environ.get("DB_USER", "postgres"),
+            password=os.environ.get("DB_PASSWORD", ""),
         )
         with conn.cursor() as cur:
             cur.execute(

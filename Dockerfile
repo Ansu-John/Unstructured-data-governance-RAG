@@ -65,7 +65,8 @@ LABEL org.opencontainers.image.revision="${BUILD_REVISION}"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=1 \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 # Install runtime system dependencies:
 #   - openjdk-17-jre-headless: required by PySpark (Spark JVM runtime)
@@ -76,6 +77,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Verify Java installation (PySpark depends on this at import time)
+RUN java -version 2>&1 | grep -q "openjdk version" || { echo "Java not found"; exit 1; }
 
 # Create a non-root user for security
 RUN groupadd -r catalog && useradd -r -g catalog -d /app -s /sbin/nologin catalog

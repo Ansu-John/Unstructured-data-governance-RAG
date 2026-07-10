@@ -229,11 +229,16 @@ def _scan_s3_prefix(prefix: str) -> list[FileRecord]:
 
 
 def _is_data_file(key: str) -> bool:
-    """Return True if the key represents a data file (not meta/directory)."""
+    """Return True if the key represents a data file (not meta/directory/quarantine)."""
     if key.endswith("/"):
         return False
     basename = key.split("/")[-1]
-    return not (basename.startswith("_") or basename.startswith("."))
+    # Skip hidden files, metadata markers, and quarantine paths
+    return (
+        not basename.startswith("_")
+        and not basename.startswith(".")
+        and "/_quarantine/" not in key
+    )
 
 
 def _parse_partition_path(key: str) -> tuple[str, str, str]:

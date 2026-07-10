@@ -270,11 +270,13 @@ class TestQualityFailurePath:
         assert route == "log_fail_and_quarantine"
 
     def test_quality_router_default_when_no_result(self, test_state):
-        """quality_router defaults to cataloging when no quality result."""
+        """quality_router routes to quarantine when no quality result exists."""
         state = dict(test_state)
         state["current_file_id"] = "nonexistent"
         route = quality_router(state)
-        assert route == "cataloging"
+        # Files without a quality result are quarantined (not silently cataloged)
+        # so they get retried up to MAX_RETRIES times before being permanently failed.
+        assert route == "log_fail_and_quarantine"
 
     def test_retry_router_below_limit(self):
         """retry_router returns 'ingestion' when retries remain."""
